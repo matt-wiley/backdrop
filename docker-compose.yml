@@ -1,0 +1,14 @@
+services:
+
+  bohr-dev:
+    container_name: bohr-dev
+    build:
+      context: .
+      args:
+        USERNAME: matt
+    image: bohr-dev
+    user: matt
+    working_dir: /home/matt
+    volumes:
+      - ./:/home/matt/projects/mobua-bohr
+    entrypoint: ["sleep", "infinity"]
