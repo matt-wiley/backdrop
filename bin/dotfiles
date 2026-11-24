@@ -1,0 +1,46 @@
+#!/bin/sh
+# dotfiles: manage injected shell blocks. See docs/specs/dotfiles-system-spec.md.
+set -eu
+
+DOTFILES_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
+export DOTFILES_DIR
+
+usage() {
+  cat <<USAGE
+usage: dotfiles <command> [options]
+
+commands:
+  init [--profile NAME]   inject or upgrade blocks, write selector, build caches
+  install [--yes]         install tools from packages.toml (dry run without --yes)
+  doctor [--diff]         report health and drift of each entry file
+  sync-env                Linux: write ~/.config/environment.d/dotfiles.conf
+  test [--profile]        run the load matrix locally
+  uninstall               remove every block and environment.d/dotfiles.conf
+USAGE
+}
+
+not_implemented() {
+  printf 'dotfiles: %s: not implemented yet\n' "$1" >&2
+  exit 2
+}
+
+cmd_init()      { not_implemented init; }
+cmd_install()   { not_implemented install; }
+cmd_doctor()    { not_implemented doctor; }
+cmd_sync_env()  { not_implemented sync-env; }
+cmd_uninstall() { not_implemented uninstall; }
+cmd_test()      { exec sh "$DOTFILES_DIR/test/matrix.sh" "$@"; }
+
+[ $# -gt 0 ] || { usage >&2; exit 2; }
+cmd=$1
+shift
+case $cmd in
+  init) cmd_init "$@" ;;
+  install) cmd_install "$@" ;;
+  doctor) cmd_doctor "$@" ;;
+  sync-env) cmd_sync_env "$@" ;;
+  test) cmd_test "$@" ;;
+  uninstall) cmd_uninstall "$@" ;;
+  -h | --help | help) usage ;;
+  *) printf 'dotfiles: unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;
+esac

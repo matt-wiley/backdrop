@@ -1,0 +1,3 @@
+# Secrets sourced by host layers stay out of the repo.
+hosts/*/*.local.sh
+hosts/*/secrets*
