@@ -14,7 +14,7 @@ snapshot >"$root/before"
 run_init
 snapshot >"$root/after"
 check "is idempotent" cmp -s "$root/before" "$root/after"
-check "reports unchanged files as ok" test "$(grep -c '^ok ' "$root/out")" -eq 6
+check "reports unchanged files as ok" test "$(grep -cE '^ok +.*/\.(profile|bash_profile|bashrc|zshenv|zprofile|zshrc)$' "$root/out")" -eq 6
 
 # Existing content stays below the block, separated by one blank line.
 fresh

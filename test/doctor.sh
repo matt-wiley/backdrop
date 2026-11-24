@@ -92,6 +92,7 @@ if [ "$(uname -s)" = Linux ]; then
   check "warns when environment.d is older than env.sh" out_has 'warn   .*dotfiles.conf is older than sh/env.sh'
 
   healthy
+  rm "$H/.config/environment.d/dotfiles.conf"
   run_doctor
   check "notes environment.d is not generated yet" out_has 'info   .*dotfiles.conf not generated yet'
 
