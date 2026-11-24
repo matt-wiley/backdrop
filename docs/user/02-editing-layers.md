@@ -6,7 +6,11 @@ Every example here was added to a copy of the repo and checked in real shells.
 
 ## How the layers fit together
 
-Settings are grouped by what they are, not by shell. Each shell loads the layers that apply to it, in this order, and each profile file loads right after the shared file it overrides:
+Settings are grouped by what they are, not by shell. Each kind of shell start reads its own startup files, and the block in each one loads the layers that apply:
+
+![Which startup files each kind of shell reads, and which layers each file's block loads](load-flow-files.svg)
+
+The layers load in this order, and each profile file loads right after the shared file it overrides:
 
 | Order | Layer | Files | Loaded by |
 | --- | --- | --- | --- |
@@ -15,6 +19,10 @@ Settings are grouped by what they are, not by shell. Each shell loads the layers
 | 3 | Shell-specific | `bash/rc.bash` or `zsh/rc.zsh`, then `hosts/<profile>/rc.bash` or `rc.zsh` | Interactive bash, or interactive zsh |
 | — | Load-last | `zsh/load-last.zsh` | Interactive zsh, once, at the first prompt |
 | — | Machine-local | Anything below the block in `~/.zshrc`, `~/.bashrc` and the other entry files | That machine only, after the layers above |
+
+Inside one shell start, each entry file runs its block first, then your own lines below it. Login shells load the environment layer twice, which is harmless:
+
+![The order of files and layers inside a zsh login shell and a bash login shell](load-flow-order.svg)
 
 Two questions decide where a setting goes:
 

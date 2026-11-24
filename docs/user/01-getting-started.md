@@ -4,6 +4,10 @@ This repo gives every shell on every machine the same config, with each setting 
 
 It doesn't replace your `~/.zshrc`, `~/.bashrc` or other startup files. Instead, `dotfiles init` adds a small marked block at the top of each one, and that block loads the config from this repo. Everything below the block stays yours: hand edits, lines that installers append, and anything specific to one machine.
 
+![Which startup files each kind of shell reads, and which layers each file's block loads](load-flow-files.svg)
+
+Every shell reaches the environment layer; only interactive shells reach the interactive layers. [Editing the layers](02-editing-layers.md#how-the-layers-fit-together) shows the order inside a single shell start.
+
 ## What you need
 
 - Linux or macOS.
