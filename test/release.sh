@@ -170,6 +170,16 @@ check "fails for a version with no notes" fails sh -c 'sh "$1" 1.0.0 2>/dev/null
 rel=$root/rel
 copy_tree "$rel"
 printf '0.0.0\n' >"$rel/VERSION"
+# Its own changelog: the repo's Unreleased section is empty right after a release.
+cat >"$rel/CHANGELOG.md" <<'X'
+# Changelog
+
+## Unreleased
+
+### Added
+
+- A change to release.
+X
 g -C "$rel" -c init.defaultBranch=main init -q
 for k in user.name=dotfiles-test user.email=test@example.invalid commit.gpgsign=false tag.gpgsign=false core.hooksPath=/dev/null; do
   git -C "$rel" config "${k%%=*}" "${k#*=}"
