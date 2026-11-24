@@ -1,0 +1,934 @@
+#!/bin/sh
+# dotfiles: manage injected shell blocks. See docs/user/01-getting-started.md and docs/developer/specs/dotfiles-system-spec.md.
+set -eu
+
+# Resolve the repo through any symlink to this script (e.g. ~/.local/bin/dotfiles).
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+  esac
+done
+DOTFILES_DIR=$(cd "$(dirname "$self")/.." && pwd -P)
+export DOTFILES_DIR
+
+case $(uname -s) in
+  Darwin) DOTFILES_OS=darwin ;;
+  *) DOTFILES_OS=linux ;;
+esac
+
+SELECTOR=$HOME/.config/dotfiles/host
+CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles
+SKEL_DIR=${DOTFILES_SKEL_DIR:-/etc/skel} # overridable for tests
+
+# template:target pairs, one per shell entry file.
+ENTRY_FILES='profile:.profile bash_profile:.bash_profile bashrc:.bashrc zshenv:.zshenv zprofile:.zprofile zshrc:.zshrc'
+
+TMP=
+cleanup() { [ -z "$TMP" ] || rm -rf "$TMP"; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+say() { printf '%s\n' "$*"; }
+warn() { printf 'dotfiles: warning: %s\n' "$*" >&2; }
+err() { printf 'dotfiles: %s\n' "$*" >&2; }
+die() { err "$*"; exit 1; }
+
+usage() {
+  cat <<USAGE
+usage: dotfiles <command> [options]
+
+commands:
+  init [--profile NAME]   inject or upgrade blocks, write selector, build caches
+  install [--yes]         install tools from packages.toml (dry run without --yes)
+  doctor [--diff]         report health and drift of each entry file
+  sync-env                Linux: write ~/.config/environment.d/dotfiles.conf
+  test [--profile]        run the load matrix locally
+  uninstall               remove every block and environment.d/dotfiles.conf
+  version                 print the installed version
+USAGE
+}
+
+# --- init -------------------------------------------------------------------
+
+# The repo path as written into blocks: relative to $HOME when it lives there,
+# so the block survives a renamed home directory.
+block_dir() {
+  case $DOTFILES_DIR in
+    *'"'* | *'\'* | *'`'* | *'$'*)
+      die "repo path contains a character that can't be written into a block: $DOTFILES_DIR" ;;
+  esac
+  home_real=$(cd "$HOME" && pwd -P)
+  case $DOTFILES_DIR in
+    "$home_real") printf '%s' '$HOME' ;;
+    "$home_real"/*) printf '%s' "\$HOME/${DOTFILES_DIR#"$home_real"/}" ;;
+    *) printf '%s' "$DOTFILES_DIR" ;;
+  esac
+}
+
+# render_block TEMPLATE DIR: print the template with @DOTFILES_DIR@ replaced.
+render_block() {
+  awk -v dir="$2" '{
+    i = index($0, "@DOTFILES_DIR@")
+    if (i) $0 = substr($0, 1, i - 1) dir substr($0, i + 14)
+    print
+  }' "$1"
+}
+
+# splice BLOCKFILE SOURCE: print SOURCE with every existing dotfiles block
+# removed (see strip) and BLOCKFILE placed first, after a shebang if any, then
+# one blank line before the machine content. strip removes that same blank
+# line, so init is idempotent and uninstall restores the file exactly.
+# Exits 3 if SOURCE has an unterminated or nested block.
+splice() {
+  strip "$2" >"$TMP/stripped" || return
+  awk -v blockfile="$1" '
+    BEGIN { while ((getline line < blockfile) > 0) block = block line "\n" }
+    NR == 1 && /^#!/ { shebang = $0 "\n"; next }
+    { rest[++n] = $0 }
+    END {
+      printf "%s%s", shebang, block
+      if (n > 0) print ""
+      for (i = 1; i <= n; i++) print rest[i]
+    }' "$TMP/stripped"
+}
+
+# inject_file TEMPLATE TARGET DIR: returns non-zero if TARGET was left alone
+# because of a problem.
+inject_file() {
+  tmpl=$1 target=$2 name=${2##*/}
+  render_block "$tmpl" "$3" >"$TMP/block"
+
+  if [ -L "$target" ] && [ ! -e "$target" ]; then
+    err "$target is a broken symlink; skipped"
+    return 1
+  fi
+  if [ ! -e "$target" ]; then
+    cat "$TMP/block" >"$target"
+    say "created  $target"
+    return 0
+  fi
+  if [ ! -f "$target" ]; then
+    err "$target is not a regular file; skipped"
+    return 1
+  fi
+
+  source=$target
+  if ! grep -q '^# >>> dotfiles ' "$target" && [ "$DOTFILES_OS" = linux ] &&
+    [ -f "$SKEL_DIR/$name" ] && cmp -s "$target" "$SKEL_DIR/$name"; then
+    [ -e "$target.dist" ] || cp -p "$target" "$target.dist"
+    say "backup   $target -> $target.dist (distro skeleton)"
+    source=/dev/null
+  fi
+
+  status=0
+  splice "$TMP/block" "$source" >"$TMP/new" || status=$?
+  if [ "$status" -eq 3 ]; then
+    err "$target has an unterminated or nested dotfiles block; fix it by hand. Skipped"
+    return 1
+  elif [ "$status" -ne 0 ]; then
+    err "$target: failed to build new content; skipped"
+    return 1
+  fi
+
+  if cmp -s "$TMP/new" "$target"; then
+    say "ok       $target"
+    return 0
+  fi
+  [ ! -L "$target" ] || warn "$target is a symlink; editing the file it points to"
+  # Write in place: keeps permissions, ownership and symlinks.
+  cat "$TMP/new" >"$target"
+  say "updated  $target"
+}
+
+# write_selector NAME
+write_selector() {
+  case $1 in
+    '' | . | .. | */* | -*) die "invalid profile name: '$1'" ;;
+  esac
+  [ -d "$DOTFILES_DIR/hosts/$1" ] ||
+    warn "no directory hosts/$1 in the repo; host files will be skipped"
+  mkdir -p "${SELECTOR%/*}"
+  printf '%s\n' "$1" >"$SELECTOR"
+  say "profile  $1 (written to $SELECTOR)"
+}
+
+read_profile() {
+  profile=
+  [ -r "$SELECTOR" ] && read -r profile <"$SELECTOR" || :
+  printf '%s' "$profile"
+}
+
+# list_tools MANAGER FILE...: print one tab-separated line per tool in the
+# packages.toml files: name, required (1/0), commands, MANAGER's package and
+# mise spec, with "-" for an empty field. A table in a later file replaces
+# the same tool's table from an earlier one. Commands come from the `bin`
+# key, defaulting to the tool's name.
+list_tools() {
+  pm_=$1
+  shift
+  awk -v pm="$pm_" '
+    function flush() {
+      if (name == "") return
+      if (!(name in seen)) { order[++n] = name; seen[name] = 1 }
+      R[name] = req; B[name] = bins
+      P[name] = pkg == "" ? "-" : pkg; M[name] = mise == "" ? "-" : mise
+    }
+    /^[[:space:]]*\[/ {
+      flush()
+      name = $0; gsub(/[][[:space:]]/, "", name)
+      bins = name; req = 0; pkg = ""; mise = ""; next
+    }
+    name != "" && /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=/ {
+      k = $0; sub(/^[[:space:]]*/, "", k); sub(/[[:space:]]*=.*/, "", k)
+      v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]*#.*/, "", v)
+      gsub(/"/, "", v)
+      if (k == "bin") bins = v
+      else if (k == "required") req = (v == "true")
+      else if (k == "mise") mise = v
+      else if (k == pm) pkg = v
+    }
+    END {
+      flush()
+      for (i = 1; i <= n; i++) {
+        t = order[i]
+        printf "%s\t%d\t%s\t%s\t%s\n", t, R[t], B[t], P[t], M[t]
+      }
+    }' "$@"
+}
+
+# tools_for MANAGER: list_tools over the shared and the profile's packages.toml.
+tools_for() {
+  tpm=$1
+  set -- "$DOTFILES_DIR/packages.toml"
+  profile=$(read_profile)
+  if [ -n "$profile" ] && [ -f "$DOTFILES_DIR/hosts/$profile/packages.toml" ]; then
+    set -- "$@" "$DOTFILES_DIR/hosts/$profile/packages.toml"
+  fi
+  list_tools "$tpm" "$@"
+}
+
+# has_any "CMD [CMD...]": true if any of the commands is on PATH.
+has_any() {
+  for b in $1; do
+    if command -v "$b" >/dev/null 2>&1; then return 0; fi
+  done
+  return 1
+}
+
+# missing_tools all|required: print the names of tools that aren't on PATH,
+# space-separated.
+missing_tools() {
+  mode=$1
+  missing=$(tools_for - | while IFS='	' read -r tool req bins _pkg _mise; do
+    [ "$mode" = all ] || [ "$req" = 1 ] || continue
+    has_any "$bins" || printf '%s ' "$tool"
+  done)
+  printf '%s' "${missing% }"
+}
+
+report_missing_tools() {
+  missing=$(missing_tools all)
+  [ -z "$missing" ] || say "missing  $missing (see \`dotfiles install\`)"
+}
+
+cmd_init() {
+  profile_arg=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --profile) [ $# -ge 2 ] || die "--profile needs a name"; profile_arg=$2; shift 2 ;;
+      --profile=*) profile_arg=${1#--profile=}; shift ;;
+      -h | --help) say "usage: dotfiles init [--profile NAME]"; return 0 ;;
+      *) die "init: unknown option: $1" ;;
+    esac
+  done
+
+  dir=$(block_dir)
+  TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
+
+  if [ -n "$profile_arg" ]; then
+    write_selector "$profile_arg"
+  elif [ -z "$(read_profile)" ]; then
+    say "profile  none (pass --profile NAME to select one)"
+  else
+    say "profile  $(read_profile)"
+  fi
+
+  failed=0
+  for pair in $ENTRY_FILES; do
+    inject_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$HOME/${pair#*:}" "$dir" ||
+      failed=$((failed + 1))
+  done
+  # A new ~/.bash_profile hides ~/.bash_login from bash login shells.
+  [ ! -e "$HOME/.bash_login" ] ||
+    warn "$HOME/.bash_login is no longer read by bash; move its content below the block in ~/.bash_profile"
+
+  mkdir -p "$CACHE_DIR"
+
+  env_failed=0
+  if [ "$DOTFILES_OS" = linux ]; then
+    sync_env || env_failed=1
+  fi
+
+  report_missing_tools
+
+  if [ "$failed" -gt 0 ]; then
+    err "$failed entry file(s) skipped"
+  fi
+  [ "$failed" -eq 0 ] && [ "$env_failed" -eq 0 ]
+}
+
+# --- sync-env ---------------------------------------------------------------
+
+# The PATH a systemd user session starts with, before environment.d applies.
+BASE_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENVD_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/dotfiles.conf
+
+# env_changes BEFORE AFTER: compare two NAME=VALUE dumps and print one line
+# per variable the env layer set, tab-separated:
+#   set  NAME VALUE      write NAME=VALUE
+#   skip NAME REASON     can't be written to environment.d
+# A list variable (PATH and the like) that keeps all its old entries is
+# written as NEW:ENTRIES:${NAME}, so it extends the session's value.
+env_changes() {
+  awk '
+    function unsafe(s) {
+      if (index(s, "@DFNL@")) return "contains a newline"
+      if (s ~ /[$\\"`]/ || index(s, q)) return "contains $, \\, a quote or a backtick"
+      if (s ~ /^[ \t]|[ \t]$/) return "has leading or trailing whitespace"
+      return ""
+    }
+    function out(kind, k, v) { printf "%s\t%s\t%s\n", kind, k, v }
+    BEGIN { q = sprintf("%c", 39) }
+    { i = index($0, "="); k = substr($0, 1, i - 1); v = substr($0, i + 1) }
+    FNR == NR { before[k] = v; next }
+    k == "PWD" || k == "OLDPWD" || k == "SHLVL" || k == "_" { next }
+    (k in before) && before[k] == v { next }
+    {
+      r = unsafe(v)
+      if (r != "") { out("skip", k, r); next }
+      if ((k in before) && before[k] != "") {
+        # Prepend form if every old entry survives.
+        n = split(before[k], b, ":"); m = split(v, a, ":")
+        split("", have); split("", old)
+        for (j = 1; j <= m; j++) have[a[j]] = 1
+        keep = 1
+        for (j = 1; j <= n; j++) { old[b[j]] = 1; if (!(b[j] in have)) keep = 0 }
+        if (keep) {
+          pre = ""
+          for (j = 1; j <= m; j++)
+            if (a[j] != "" && !(a[j] in old)) { pre = pre (pre == "" ? "" : ":") a[j]; old[a[j]] = 1 }
+          if (pre != "") out("set", k, pre ":${" k "}")
+          next
+        }
+      }
+      out("set", k, v)
+    }' "$1" "$2"
+}
+
+# sync_env: write ENVD_FILE from what the ~/.profile block exports.
+sync_env() {
+  [ -n "$TMP" ] || TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
+
+  # Run the real ~/.profile block in a clean environment, dumping the
+  # exported variables before and after it.
+  {
+    # shellcheck disable=SC2016
+    printf '%s\n' 'dump() { awk '\''BEGIN { for (k in ENVIRON) { v = ENVIRON[k]; gsub(/\n/, "@DFNL@", v); print k "=" v } }'\'' | LC_ALL=C sort; }'
+    printf '%s\n' 'dump >"$1"'
+    render_block "$DOTFILES_DIR/blocks/profile.sh" "$(block_dir)"
+    printf '%s\n' 'dump >"$2"'
+  } >"$TMP/probe"
+  set -- HOME="$HOME" PATH="$BASE_PATH"
+  [ -z "${USER-}" ] || set -- "$@" USER="$USER"
+  [ -z "${LOGNAME-}" ] || set -- "$@" LOGNAME="$LOGNAME"
+  if ! env -i "$@" sh "$TMP/probe" "$TMP/before" "$TMP/after" >"$TMP/probe.out" 2>&1; then
+    err "sync-env: the env layer failed in a clean sh:"
+    sed 's/^/  /' "$TMP/probe.out" >&2
+    return 1
+  fi
+  if [ -s "$TMP/probe.out" ]; then
+    warn "sync-env: the env layer printed output; it should be silent:"
+    sed 's/^/  /' "$TMP/probe.out" >&2
+  fi
+
+  env_changes "$TMP/before" "$TMP/after" >"$TMP/changes"
+  count=0
+  {
+    say '# Generated by `dotfiles sync-env` from the env layer; do not edit.'
+    say '# Read by systemd at login. Values are literal, except ${NAME}.'
+    while IFS='	' read -r kind name value; do
+      case $kind in
+        set) say "$name=$value"; count=$((count + 1)) ;;
+        skip) warn "sync-env: skipped $name: value $value" ;;
+      esac
+    done <"$TMP/changes"
+  } >"$TMP/envd"
+
+  mkdir -p "${ENVD_FILE%/*}"
+  if cmp -s "$TMP/envd" "$ENVD_FILE"; then
+    touch "$ENVD_FILE" # mark it current for doctor
+    say "ok       $(show "$ENVD_FILE")"
+  else
+    mv "$TMP/envd" "$ENVD_FILE"
+    say "wrote    $(show "$ENVD_FILE") ($count variables; takes effect at next login)"
+  fi
+}
+
+cmd_sync_env() {
+  case ${1-} in
+    '') ;;
+    -h | --help) say "usage: dotfiles sync-env"; return 0 ;;
+    *) die "sync-env: unknown option: $1" ;;
+  esac
+  [ "$DOTFILES_OS" = linux ] ||
+    die "sync-env is Linux only; on macOS, GUI apps don't read the shell environment (see the spec)"
+  sync_env
+}
+
+# --- uninstall --------------------------------------------------------------
+
+# strip SOURCE: print SOURCE without its dotfiles blocks. Also drops the one
+# blank line init adds after a block at the top. Exits 3 on a broken block.
+strip() {
+  awk '
+    NR == 1 && /^#!/ { print; next }
+    /^# >>> dotfiles / { if (inblock) bad = 1; inblock = 1; next }
+    inblock && $0 == "# <<< dotfiles <<<" { inblock = 0; dropblank = !seen; next }
+    inblock { next }
+    dropblank && $0 == "" { dropblank = 0; next }
+    { dropblank = 0; seen = 1; print }
+    END { if (inblock || bad) exit 3 }' "$1"
+}
+
+# has_content FILE: true if FILE has a non-blank line other than a shebang.
+has_content() {
+  awk 'NR == 1 && /^#!/ { next } /[^[:space:]]/ { found = 1; exit } END { exit !found }' "$1"
+}
+
+# uninstall_file TARGET: returns non-zero if TARGET was left alone because of a problem.
+uninstall_file() {
+  target=$1
+  if [ ! -f "$target" ] || ! grep -q '^# >>> dotfiles ' "$target"; then
+    return 0
+  fi
+
+  status=0
+  strip "$target" >"$TMP/new" || status=$?
+  if [ "$status" -ne 0 ]; then
+    err "$target has an unterminated or nested dotfiles block; fix it by hand. Skipped"
+    return 1
+  fi
+
+  if has_content "$TMP/new"; then
+    cat "$TMP/new" >"$target"
+    say "removed  block from $target"
+    [ ! -e "$target.dist" ] ||
+      say "kept     $target.dist (content was added below the block; merge by hand)"
+    return 0
+  fi
+
+  # Nothing but the block: the file was created or emptied by init.
+  if [ -f "$target.dist" ]; then
+    cat "$target.dist" >"$target"
+    rm -f "$target.dist"
+    say "restored $target from $target.dist"
+  elif [ -L "$target" ]; then
+    cat "$TMP/new" >"$target"
+    say "removed  block from $target (left the empty link target in place)"
+  else
+    rm -f "$target"
+    say "deleted  $target (nothing left but the block)"
+  fi
+}
+
+cmd_uninstall() {
+  case ${1-} in
+    '') ;;
+    -h | --help) say "usage: dotfiles uninstall"; return 0 ;;
+    *) die "uninstall: unknown option: $1" ;;
+  esac
+  TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
+
+  failed=0
+  for pair in $ENTRY_FILES; do
+    uninstall_file "$HOME/${pair#*:}" || failed=$((failed + 1))
+  done
+
+  envd=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/dotfiles.conf
+  if [ -e "$envd" ]; then
+    rm -f "$envd"
+    say "deleted  $envd"
+  fi
+
+  say "kept     $SELECTOR and $CACHE_DIR (remove by hand if unwanted)"
+  if [ "$failed" -gt 0 ]; then
+    err "$failed entry file(s) skipped"
+    return 1
+  fi
+}
+
+# --- doctor -----------------------------------------------------------------
+
+# Names that interactive config must not shadow, on top of each shell's builtins.
+# Flattened before use: BSD awk rejects newlines in -v values.
+COMMON_COMMANDS='awk cat cd chmod cp curl cut diff du echo env find git grep head
+kill less ln ls make man mkdir mv ps pwd rm rmdir sed sort ssh tail tar test
+touch tr wc which xargs'
+
+ERRORS=0
+WARNINGS=0
+
+# report LEVEL MESSAGE: print one finding, indented under the current heading.
+report() {
+  case $1 in
+    error) ERRORS=$((ERRORS + 1)) ;;
+    warn) WARNINGS=$((WARNINGS + 1)) ;;
+  esac
+  printf '  %-6s %s\n' "$1" "$2"
+}
+
+# show PATH: PATH with $HOME replaced by ~.
+show() {
+  case $1 in
+    "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# inspect FILE: print key=value facts about FILE's dotfiles blocks.
+inspect() {
+  awk '
+    NR == 1 && /^#!/ { next }
+    !started && /[^[:space:]]/ { started = 1; first = /^# >>> dotfiles / }
+    /^# >>> dotfiles / {
+      if (inblock) broken = 1
+      inblock = 1; blocks++
+      if (blocks == 1) version = $4
+      next
+    }
+    inblock && $0 == "# <<< dotfiles <<<" { inblock = 0; next }
+    inblock && blocks == 1 && /^DOTFILES_DIR="/ {
+      dir = $0; sub(/^DOTFILES_DIR="/, "", dir); sub(/".*/, "", dir)
+    }
+    END {
+      if (inblock) broken = 1
+      printf "blocks=%d\nbroken=%d\nfirst=%d\nversion=%s\ndir=%s\n",
+        blocks, broken, first, version, dir
+    }' "$1"
+}
+
+# first_block FILE: print the first block, markers included.
+first_block() {
+  awk '/^# >>> dotfiles / { on = 1 } on { print } on && $0 == "# <<< dotfiles <<<" { exit }' "$1"
+}
+
+# sourced_files BLOCKFILE: repo-relative files a block always sources.
+# Host files are optional and skipped.
+sourced_files() {
+  sed -n 's/.*"\$DOTFILES_DIR\/\([^"$]*\)".*/\1/p' "$1" | sort -u
+}
+
+# version_num vN: print N, or 0 if it isn't a version.
+version_num() {
+  n=${1#v}
+  case $n in '' | *[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
+# contains NEEDLE HAYSTACK: true if NEEDLE's text appears in HAYSTACK.
+contains() {
+  awk 'FNR == NR { a = a $0 "\n"; next } { b = b $0 "\n" }
+       END { exit !(a != "" && index(b, a)) }' "$1" "$2"
+}
+
+# doctor_file TEMPLATE TARGET: check one entry file and save its local content
+# to $TMP/local/NAME.
+doctor_file() {
+  tmpl=$1 target=$2 name=${2##*/}
+  before=$((ERRORS + WARNINGS))
+  say "$(show "$target")"
+
+  if [ ! -e "$target" ]; then
+    report error "missing (run \`dotfiles init\`)"; return 0
+  fi
+  if [ ! -f "$target" ]; then
+    report error "not a regular file"; return 0
+  fi
+
+  inspect "$target" >"$TMP/facts"
+  fact() { sed -n "s/^$1=//p" "$TMP/facts"; }
+  blocks=$(fact blocks) broken=$(fact broken) first=$(fact first)
+  version=$(fact version) dir=$(fact dir)
+
+  if [ "$blocks" -eq 0 ]; then
+    report error "no dotfiles block (run \`dotfiles init\`)"; return 0
+  fi
+  if [ "$broken" -eq 1 ]; then
+    report error "unterminated or nested block; fix it by hand"; return 0
+  fi
+  [ "$blocks" -eq 1 ] || report error "$blocks blocks; \`dotfiles init\` merges them into one"
+  [ "$first" -eq 1 ] || report error "block is not at the top; something was added above it (\`dotfiles init\` moves it back)"
+
+  first_block "$target" >"$TMP/block"
+  case $dir in
+    '$HOME') rdir=$HOME ;;
+    '$HOME'/*) rdir=$HOME/${dir#'$HOME/'} ;;
+    *) rdir=$dir ;;
+  esac
+  same_dir=0
+  if [ -z "$dir" ]; then
+    report error "block has no DOTFILES_DIR line"
+  elif [ ! -d "$rdir" ]; then
+    report error "DOTFILES_DIR does not exist: $dir"
+  else
+    if [ "$(cd "$rdir" && pwd -P)" = "$DOTFILES_DIR" ]; then
+      same_dir=1
+    else
+      report warn "DOTFILES_DIR is $rdir, but this repo is $DOTFILES_DIR (run \`dotfiles init\` from the repo you use)"
+    fi
+    for f in $(sourced_files "$TMP/block"); do
+      [ -r "$rdir/$f" ] || report error "sourced file is missing: \$DOTFILES_DIR/$f"
+      if [ "$f" = sh/env.sh ] && [ ! -r "$rdir/sh/lib.sh" ]; then
+        report error "sourced file is missing: \$DOTFILES_DIR/sh/lib.sh"
+      fi
+    done
+  fi
+
+  want=$(sed -n '1s/^# >>> dotfiles \(v[0-9]*\) .*/\1/p' "$tmpl")
+  have_n=$(version_num "$version") want_n=$(version_num "$want")
+  if [ "$have_n" -lt "$want_n" ]; then
+    report warn "block is $version, repo has $want (run \`dotfiles init\` to upgrade)"
+  elif [ "$have_n" -gt "$want_n" ]; then
+    report warn "block is $version, newer than the repo's $want (is the repo out of date?)"
+  elif [ "$same_dir" -eq 1 ]; then
+    render_block "$tmpl" "$(block_dir)" >"$TMP/want"
+    cmp -s "$TMP/block" "$TMP/want" ||
+      report warn "block was edited inside the markers (\`dotfiles init\` restores it)"
+  fi
+
+  strip "$target" | awk 'NR == 1 && /^#!/ { next } { print }' >"$TMP/local/$name"
+  if [ "$DOTFILES_OS" = linux ] && [ -f "$SKEL_DIR/$name" ] &&
+    contains "$SKEL_DIR/$name" "$TMP/local/$name"; then
+    report warn "distro skeleton $(show "$SKEL_DIR/$name") was added below the block"
+  fi
+
+  [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "block $version at the top"
+}
+
+# shadow_names SHELL: print "kind name" for each alias or function the shell's
+# interactive startup defines over a builtin or a common command.
+shadow_names() {
+  case $1 in
+    bash) probe='compgen -b | sed "s/^/B /"; compgen -a | sed "s/^/A /"
+                 declare -F | sed "s/^declare -f[^ ]* /F /"' ;;
+    zsh) probe='print -rl -- ${(k)builtins/#/B } ${(k)aliases/#/A } ${(k)functions/#/F }' ;;
+  esac
+  # Prefix probe lines so stray output from rc files can't be mistaken for names.
+  "$1" -ic "{ $probe; } | sed 's/^/@df@ /'" </dev/null 2>/dev/null |
+    sed -n 's/^@df@ //p' |
+    awk -v common="$(printf '%s' "$COMMON_COMMANDS" | tr '\n' ' ')" '
+      BEGIN { n = split(common, c, /[[:space:]]+/); for (i = 1; i <= n; i++) bad[c[i]] = 1 }
+      $1 == "B" { bad[$2] = 1; next }
+      { seen[NR] = $0 }
+      END {
+        for (i = 1; i <= NR; i++) {
+          if (!(i in seen)) continue
+          split(seen[i], f, " ")
+          if (f[2] in bad) print (f[1] == "A" ? "alias" : "function"), f[2]
+        }
+      }'
+}
+
+doctor_general() {
+  say "general"
+  before=$((ERRORS + WARNINGS))
+
+  profile=$(read_profile)
+  if [ -z "$profile" ]; then
+    report warn "no profile selected in $(show "$SELECTOR") (\`dotfiles init --profile NAME\`)"
+  elif [ ! -d "$DOTFILES_DIR/hosts/$profile" ]; then
+    report warn "profile '$profile' has no directory hosts/$profile"
+  fi
+
+  if [ "$DOTFILES_OS" = linux ]; then
+    conf=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/dotfiles.conf
+    if [ ! -e "$conf" ]; then
+      report info "$(show "$conf") not generated yet (\`dotfiles sync-env\`)"
+    else
+      for f in sh/env.sh sh/os/linux.sh "hosts/$profile/env.sh"; do
+        if [ -f "$DOTFILES_DIR/$f" ] && [ "$DOTFILES_DIR/$f" -nt "$conf" ]; then
+          report warn "$(show "$conf") is older than $f (\`dotfiles sync-env\`)"
+          break
+        fi
+      done
+    fi
+  fi
+
+  for sh in bash zsh; do
+    command -v "$sh" >/dev/null 2>&1 || continue
+    if ! shadow_names "$sh" >"$TMP/shadow"; then
+      report warn "$sh: could not list aliases and functions to check for shadowing"
+      continue
+    fi
+    while read -r kind word; do
+      report warn "$sh: $kind '$word' shadows a builtin or common command"
+    done <"$TMP/shadow"
+  done
+
+  for tool in $(missing_tools required); do
+    report info "required tool '$tool' is not installed (\`dotfiles install\`)"
+  done
+
+  [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "profile, environment and aliases"
+}
+
+# doctor_local DIFF: print each entry file's content below the block, or with
+# DIFF=1 its changes since the last run. Then save a new snapshot.
+doctor_local() {
+  snapdir=$CACHE_DIR/doctor
+  say "local content below each block"
+  for pair in $ENTRY_FILES; do
+    name=${pair#*:}
+    cur=$TMP/local/$name
+    [ -f "$cur" ] || continue
+    old=$snapdir/$name
+    if [ "$1" -eq 1 ] && [ -f "$old" ]; then
+      if cmp -s "$old" "$cur"; then
+        say "  ~/$name: unchanged since last run"
+      else
+        say "  ~/$name: changed since last run"
+        diff -u -L "last run" -L "now" "$old" "$cur" | sed 's/^/    /' || :
+      fi
+    elif [ -s "$cur" ]; then
+      say "  ~/$name:"
+      sed 's/^/    | /' "$cur"
+    else
+      say "  ~/$name: (empty)"
+    fi
+  done
+  mkdir -p "$snapdir"
+  for f in "$TMP/local"/.[!.]*; do
+    if [ -f "$f" ]; then cp "$f" "$snapdir/"; fi
+  done
+}
+
+# parse_check "SHELL..." FILE...: report an error for each repo-relative FILE
+# that one of the shells can't parse. Missing files and shells are skipped.
+parse_check() {
+  shells=$1
+  shift
+  for f in "$@"; do
+    [ -f "$DOTFILES_DIR/$f" ] || continue
+    for sh in $shells; do
+      command -v "$sh" >/dev/null 2>&1 || continue
+      if ! msg=$("$sh" -n "$DOTFILES_DIR/$f" 2>&1); then
+        # First line of the message, with the repo path trimmed.
+        msg=$(printf '%s\n' "$msg" | awk -v p="$DOTFILES_DIR/" '
+          { while ((i = index($0, p))) $0 = substr($0, 1, i - 1) substr($0, i + length(p)); print; exit }')
+        report error "$f does not parse in $sh: $msg"
+        break
+      fi
+    done
+  done
+}
+
+# doctor_layers: syntax-check every layer file with each shell that loads it,
+# including the selected profile's files.
+doctor_layers() {
+  say "layers"
+  before=$((ERRORS + WARNINGS))
+  host=hosts/$(read_profile)
+  parse_check "sh bash zsh" sh/lib.sh sh/env.sh sh/os/linux.sh sh/os/darwin.sh "$host/env.sh"
+  parse_check "bash zsh" sh/interactive.sh "$host/interactive.sh"
+  parse_check bash bash/rc.bash "$host/rc.bash"
+  parse_check zsh zsh/rc.zsh zsh/load-last.zsh "$host/rc.zsh"
+  [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "every layer file parses"
+}
+
+cmd_doctor() {
+  diff_mode=0
+  case ${1-} in
+    '') ;;
+    --diff) diff_mode=1 ;;
+    -h | --help) say "usage: dotfiles doctor [--diff]"; return 0 ;;
+    *) die "doctor: unknown option: $1" ;;
+  esac
+  TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
+  mkdir "$TMP/local"
+
+  for pair in $ENTRY_FILES; do
+    doctor_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$HOME/${pair#*:}"
+  done
+  doctor_layers
+  doctor_general
+  doctor_local "$diff_mode"
+
+  e=errors w=warnings
+  [ "$ERRORS" -ne 1 ] || e=error
+  [ "$WARNINGS" -ne 1 ] || w=warning
+  say "doctor: $ERRORS $e, $WARNINGS $w"
+  [ "$ERRORS" -eq 0 ]
+}
+
+# --- install ----------------------------------------------------------------
+
+# detect_manager: print the package manager to use. macOS uses Homebrew;
+# Linux prefers the system manager, then Homebrew.
+detect_manager() {
+  if [ "$DOTFILES_OS" = darwin ]; then
+    set -- brew:brew
+  else
+    set -- apt-get:apt dnf:dnf pacman:pacman brew:brew
+  fi
+  for m in "$@"; do
+    if command -v "${m%%:*}" >/dev/null 2>&1; then
+      printf '%s' "${m#*:}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# run_step CMD...: print a command, and run it when applying.
+run_step() {
+  if [ "$apply" -eq 0 ]; then
+    say "would run  $*"
+    return 0
+  fi
+  say "run      $*"
+  "$@" || { err "install: command failed: $*"; return 1; }
+}
+
+cmd_install() {
+  apply=0 pm=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -y | --yes) apply=1; shift ;;
+      --manager) [ $# -ge 2 ] || die "--manager needs a name"; pm=$2; shift 2 ;;
+      --manager=*) pm=${1#--manager=}; shift ;;
+      -h | --help) say "usage: dotfiles install [--yes] [--manager brew|apt|dnf|pacman]"; return 0 ;;
+      *) die "install: unknown option: $1" ;;
+    esac
+  done
+
+  if [ -n "$pm" ]; then
+    case $pm in
+      brew | apt | dnf | pacman) ;;
+      *) die "install: unknown manager '$pm' (brew, apt, dnf or pacman)" ;;
+    esac
+  elif ! pm=$(detect_manager); then
+    if [ "$DOTFILES_OS" = darwin ]; then
+      die "install: Homebrew not found; install it from https://brew.sh, then re-run"
+    fi
+    die "install: no supported package manager found (apt, dnf, pacman or brew)"
+  fi
+  sudo=
+  if [ "$pm" != brew ] && [ "$(id -u)" -ne 0 ]; then
+    command -v sudo >/dev/null 2>&1 || die "install: $pm needs root, and sudo isn't available"
+    sudo=sudo
+  fi
+  say "manager  $pm${sudo:+ (with sudo)}"
+
+  TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
+  tools_for "$pm" >"$TMP/tools"
+  pkgs= specs= mise_planned=0
+  : >"$TMP/planned"
+  while IFS='	' read -r tool _req bins pkg mise; do
+    if has_any "$bins"; then
+      say "ok       $tool"
+    elif [ "$mise" != - ]; then
+      say "install  $tool via mise ($mise)"
+      specs="$specs $mise"
+      printf '%s\t%s\n' "$tool" "$bins" >>"$TMP/planned"
+    elif [ "$pkg" != - ]; then
+      say "install  $tool via $pm ($pkg)"
+      pkgs="$pkgs $pkg"
+      printf '%s\t%s\n' "$tool" "$bins" >>"$TMP/planned"
+      case " $bins " in *' mise '*) mise_planned=1 ;; esac
+    else
+      say "skip     $tool (no $pm package in packages.toml)"
+    fi
+  done <"$TMP/tools"
+
+  if [ -z "$pkgs$specs" ]; then
+    say "nothing to install"
+    return 0
+  fi
+
+  failed=0
+  if [ -n "$pkgs" ]; then
+    # Package names never contain spaces, so $pkgs is split on purpose.
+    case $pm in
+      brew) run_step brew install $pkgs ;;
+      apt) run_step $sudo apt-get update && run_step $sudo apt-get install -y $pkgs ;;
+      dnf) run_step $sudo dnf install -y $pkgs ;;
+      pacman) run_step $sudo pacman -S --needed --noconfirm $pkgs ;;
+    esac || failed=1
+  fi
+
+  # Runtimes go through mise, which may have been installed just above.
+  if [ -n "$specs" ]; then
+    if command -v mise >/dev/null 2>&1 || { [ "$apply" -eq 0 ] && [ "$mise_planned" -eq 1 ]; }; then
+      for spec in $specs; do
+        run_step mise use -g "$spec" || failed=1
+      done
+    else
+      warn "install: skipped${specs}: mise isn't installed and has no $pm package to install it"
+    fi
+  fi
+
+  if [ "$apply" -eq 0 ]; then
+    say "dry run; \`dotfiles install --yes\` applies it"
+    return 0
+  fi
+
+  # A package can install under a command name packages.toml doesn't list.
+  while IFS='	' read -r tool bins; do
+    has_any "$bins" || warn "install: $tool is still missing; none of '$bins' is on PATH (check its \`bin\` key)"
+  done <"$TMP/planned"
+  [ "$failed" -eq 0 ]
+}
+
+# --- other commands ---------------------------------------------------------
+
+# cmd_version: the release in VERSION, plus the git commit for a clone.
+cmd_version() {
+  version=$(cat "$DOTFILES_DIR/VERSION" 2>/dev/null || echo unknown)
+  if [ -e "$DOTFILES_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+    commit=$(git -C "$DOTFILES_DIR" describe --tags --always --dirty 2>/dev/null || :)
+    say "dotfiles $version${commit:+ (git $commit)}"
+  else
+    say "dotfiles $version"
+  fi
+}
+
+cmd_test() {
+  for t in init uninstall doctor sync-env install faults release; do
+    sh "$DOTFILES_DIR/test/$t.sh" || return 1
+  done
+  # Load this machine's profile in the matrix, so its host files are tested too.
+  profile=$(read_profile)
+  if [ -n "$profile" ] && [ -d "$DOTFILES_DIR/hosts/$profile" ]; then
+    DOTFILES_TEST_PROFILE=$profile
+    export DOTFILES_TEST_PROFILE
+  fi
+  exec sh "$DOTFILES_DIR/test/matrix.sh" "$@"
+}
+
+[ $# -gt 0 ] || { usage >&2; exit 2; }
+cmd=$1
+shift
+case $cmd in
+  init) cmd_init "$@" ;;
+  install) cmd_install "$@" ;;
+  doctor) cmd_doctor "$@" ;;
+  sync-env) cmd_sync_env "$@" ;;
+  test) cmd_test "$@" ;;
+  uninstall) cmd_uninstall "$@" ;;
+  version | --version | -V) cmd_version ;;
+  -h | --help | help) usage ;;
+  *) err "unknown command: $cmd"; usage >&2; exit 2 ;;
+esac

@@ -10,5 +10,5 @@ services:
     user: matt
     working_dir: /home/matt
     volumes:
-      - ./:/home/matt/projects/mobua-bohr
+      - ./:/home/matt/projects/backdrop
     entrypoint: ["sleep", "infinity"]
