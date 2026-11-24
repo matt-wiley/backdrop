@@ -82,22 +82,21 @@ render_block() {
 }
 
 # splice BLOCKFILE SOURCE: print SOURCE with every existing dotfiles block
-# removed and BLOCKFILE placed first (after a shebang, if any).
+# removed (see strip) and BLOCKFILE placed first, after a shebang if any, then
+# one blank line before the machine content. strip removes that same blank
+# line, so init is idempotent and uninstall restores the file exactly.
 # Exits 3 if SOURCE has an unterminated or nested block.
 splice() {
+  strip "$2" >"$TMP/stripped" || return
   awk -v blockfile="$1" '
     BEGIN { while ((getline line < blockfile) > 0) block = block line "\n" }
     NR == 1 && /^#!/ { shebang = $0 "\n"; next }
-    /^# >>> dotfiles / { if (inblock) bad = 1; inblock = 1; next }
-    inblock && $0 == "# <<< dotfiles <<<" { inblock = 0; next }
-    inblock { next }
     { rest[++n] = $0 }
     END {
-      if (inblock || bad) exit 3
       printf "%s%s", shebang, block
-      if (n > 0 && rest[1] != "") print ""
+      if (n > 0) print ""
       for (i = 1; i <= n; i++) print rest[i]
-    }' "$2"
+    }' "$TMP/stripped"
 }
 
 # inject_file TEMPLATE TARGET DIR: returns non-zero if TARGET was left alone
@@ -246,12 +245,98 @@ cmd_init() {
 
 # --- other commands ---------------------------------------------------------
 
+# --- uninstall --------------------------------------------------------------
+
+# strip SOURCE: print SOURCE without its dotfiles blocks. Also drops the one
+# blank line init adds after a block at the top. Exits 3 on a broken block.
+strip() {
+  awk '
+    NR == 1 && /^#!/ { print; next }
+    /^# >>> dotfiles / { if (inblock) bad = 1; inblock = 1; next }
+    inblock && $0 == "# <<< dotfiles <<<" { inblock = 0; dropblank = !seen; next }
+    inblock { next }
+    dropblank && $0 == "" { dropblank = 0; next }
+    { dropblank = 0; seen = 1; print }
+    END { if (inblock || bad) exit 3 }' "$1"
+}
+
+# has_content FILE: true if FILE has a non-blank line other than a shebang.
+has_content() {
+  awk 'NR == 1 && /^#!/ { next } /[^[:space:]]/ { found = 1; exit } END { exit !found }' "$1"
+}
+
+# uninstall_file TARGET: returns non-zero if TARGET was left alone because of a problem.
+uninstall_file() {
+  target=$1
+  if [ ! -f "$target" ] || ! grep -q '^# >>> dotfiles ' "$target"; then
+    return 0
+  fi
+
+  status=0
+  strip "$target" >"$TMP/new" || status=$?
+  if [ "$status" -ne 0 ]; then
+    err "$target has an unterminated or nested dotfiles block; fix it by hand. Skipped"
+    return 1
+  fi
+
+  if has_content "$TMP/new"; then
+    cat "$TMP/new" >"$target"
+    say "removed  block from $target"
+    [ ! -e "$target.dist" ] ||
+      say "kept     $target.dist (content was added below the block; merge by hand)"
+    return 0
+  fi
+
+  # Nothing but the block: the file was created or emptied by init.
+  if [ -f "$target.dist" ]; then
+    cat "$target.dist" >"$target"
+    rm -f "$target.dist"
+    say "restored $target from $target.dist"
+  elif [ -L "$target" ]; then
+    cat "$TMP/new" >"$target"
+    say "removed  block from $target (left the empty link target in place)"
+  else
+    rm -f "$target"
+    say "deleted  $target (nothing left but the block)"
+  fi
+}
+
+cmd_uninstall() {
+  case ${1-} in
+    '') ;;
+    -h | --help) say "usage: dotfiles uninstall"; return 0 ;;
+    *) die "uninstall: unknown option: $1" ;;
+  esac
+  TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
+
+  failed=0
+  for pair in $ENTRY_FILES; do
+    uninstall_file "$HOME/${pair#*:}" || failed=$((failed + 1))
+  done
+
+  envd=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/dotfiles.conf
+  if [ -e "$envd" ]; then
+    rm -f "$envd"
+    say "deleted  $envd"
+  fi
+
+  say "kept     $SELECTOR and $CACHE_DIR (remove by hand if unwanted)"
+  if [ "$failed" -gt 0 ]; then
+    err "$failed entry file(s) skipped"
+    return 1
+  fi
+}
+
+# --- other commands ---------------------------------------------------------
+
 cmd_install()   { not_implemented install; }
 cmd_doctor()    { not_implemented doctor; }
 cmd_sync_env()  { not_implemented sync-env; }
-cmd_uninstall() { not_implemented uninstall; }
 cmd_test() {
-  sh "$DOTFILES_DIR/test/init.sh" && exec sh "$DOTFILES_DIR/test/matrix.sh" "$@"
+  for t in init uninstall; do
+    sh "$DOTFILES_DIR/test/$t.sh" || return 1
+  done
+  exec sh "$DOTFILES_DIR/test/matrix.sh" "$@"
 }
 
 [ $# -gt 0 ] || { usage >&2; exit 2; }

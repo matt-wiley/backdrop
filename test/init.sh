@@ -1,37 +1,7 @@
 #!/bin/sh
 # test/init.sh: behavior of `dotfiles init` on scratch home directories.
-# Each case copies the repo to $HOME/.dotfiles, the default clone path.
-set -u
-
-repo=$(cd "$(dirname "$0")/.." && pwd -P)
-root=$(mktemp -d)
-trap 'rm -rf "$root"' EXIT INT TERM
-fails=0
-n=0
-H=
-
-pass() { printf 'ok    init: %s\n' "$1"; }
-fail() { printf 'FAIL  init: %s\n' "$1"; fails=$((fails + 1)); }
-check() { # check DESCRIPTION COMMAND...
-  desc=$1; shift
-  if "$@"; then pass "$desc"; else fail "$desc"; fi
-}
-
-# fresh: new scratch HOME with a copy of the repo and an empty skeleton dir.
-fresh() {
-  n=$((n + 1))
-  H=$root/home$n
-  mkdir -p "$H/.dotfiles" "$root/skel$n"
-  (cd "$repo" && tar cf - --exclude .git .) | (cd "$H/.dotfiles" && tar xf -)
-}
-run_init() {
-  HOME=$H DOTFILES_SKEL_DIR=$root/skel$n "$H/.dotfiles/bin/dotfiles" init "$@" \
-    >"$root/out" 2>&1
-}
-fails() { ! "$@"; }
-first_line() { head -n 1 "$1"; }
-count_blocks() { grep -c '^# >>> dotfiles ' "$1"; }
-snapshot() { cat "$H"/.profile "$H"/.bash_profile "$H"/.bashrc "$H"/.zshenv "$H"/.zprofile "$H"/.zshrc; }
+SUITE=init
+. "$(dirname "$0")/lib.sh"
 
 # Empty home: every entry file is created; a second run changes nothing.
 fresh
@@ -124,4 +94,4 @@ run_init --profile=nosuch
 check "warns on unknown profile" grep -q 'no directory hosts/nosuch' "$root/out"
 check "rejects profile with a slash" fails run_init --profile a/b
 
-[ "$fails" -eq 0 ] || { echo "init: $fails failed"; exit 1; }
+finish
