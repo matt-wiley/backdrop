@@ -1,0 +1,140 @@
+#!/bin/sh
+# test/install.sh: plans and commands of `dotfiles install`, using fake
+# package managers that log their arguments. Nothing is really installed.
+SUITE=install
+. "$(dirname "$0")/lib.sh"
+
+FAKEBIN=$root/fakebin
+LOG=$root/log
+mkdir -p "$FAKEBIN"
+# One fake for every manager, sudo and mise: log the call; on install, put a
+# copy of itself on PATH for every package argument (name before any @).
+cat >"$FAKEBIN/fake" <<'X'
+#!/bin/sh
+me=${0##*/}
+printf '%s\n' "$me $*" >>"$LOG"
+[ "${FAIL-}" != "$me" ] || exit 1
+[ "$me" != sudo ] || exec "$@"
+for a in "$@"; do
+  case $a in -* | install | update | use) ;; *) cp "$0" "$FAKEBIN/${a%%@*}" ;; esac
+done
+X
+chmod +x "$FAKEBIN/fake"
+for m in sudo apt-get dnf pacman brew; do ln -s fake "$FAKEBIN/$m"; done
+PATH=$FAKEBIN:$PATH
+export FAKEBIN LOG PATH
+
+# setup: fresh home whose packages.toml lists only made-up tools.
+setup() {
+  fresh
+  rm -f "$LOG" "$FAKEBIN"/df-*
+  : >"$LOG"
+  cat >"$H/.dotfiles/packages.toml" <<'X'
+[df-alpha]
+apt = "df-alpha"
+dnf = "df-alpha"
+pacman = "df-alpha"
+brew = "df-alpha"
+
+[df-beta]
+bin = "df-beta df-betacmd"
+apt = "df-beta-tools"
+brew = "df-beta"
+
+[df-present]
+apt = "df-present"
+
+[df-brewonly]
+brew = "df-brewonly"
+X
+  cp "$FAKEBIN/fake" "$FAKEBIN/df-present"
+}
+logged() { grep -qxF -- "$1" "$LOG"; }
+
+# Dry run: a plan and the commands, but nothing runs.
+setup
+check "dry run succeeds" run_cli install --manager apt
+check "names the manager" out_has '^manager  apt \(with sudo\)$'
+check "skips installed tools" out_has '^ok       df-present$'
+check "plans missing tools" out_has '^install  df-alpha via apt \(df-alpha\)$'
+check "uses the manager's package name" out_has '^install  df-beta via apt \(df-beta-tools\)$'
+check "skips tools without a package" out_has '^skip     df-brewonly \(no apt package'
+check "shows the install command" out_has '^would run  sudo apt-get install -y df-alpha df-beta-tools$'
+check "says it is a dry run" out_has '^dry run'
+check "runs nothing" test ! -s "$LOG"
+
+# --yes runs one batch per manager.
+setup
+check "apt install succeeds" run_cli install --manager apt --yes
+check "updates apt first" logged 'sudo apt-get update'
+check "installs with apt-get" logged 'sudo apt-get install -y df-alpha df-beta-tools'
+check "warns when a package's commands don't appear" out_has "df-beta is still missing"
+check "does not warn for a tool that appeared" fails out_has "df-alpha is still missing"
+
+setup
+run_cli install --manager dnf --yes
+check "installs with dnf" logged 'sudo dnf install -y df-alpha'
+setup
+run_cli install --manager pacman --yes
+check "installs with pacman" logged 'sudo pacman -S --needed --noconfirm df-alpha'
+setup
+run_cli install --manager brew --yes
+check "installs with brew, without sudo" logged 'brew install df-alpha df-beta df-brewonly'
+check "never calls sudo for brew" fails grep -q '^sudo ' "$LOG"
+
+# Nothing to do.
+setup
+cp "$FAKEBIN/fake" "$FAKEBIN/df-alpha"
+cp "$FAKEBIN/fake" "$FAKEBIN/df-betacmd"
+run_cli install --manager apt --yes
+check "reports nothing to install" out_has '^nothing to install$'
+check "runs no commands" test ! -s "$LOG"
+
+# A failing manager fails the command.
+setup
+FAIL=apt-get
+export FAIL
+check "fails when the manager fails" fails run_cli install --manager apt --yes
+check "reports the failed command" out_has 'command failed: sudo apt-get update'
+unset FAIL
+
+# The profile's packages.toml adds tools and replaces shared tables.
+setup
+run_init --profile example
+cat >"$H/.dotfiles/hosts/example/packages.toml" <<'X'
+[df-gamma]
+apt = "df-gamma"
+
+[df-alpha]
+apt = "df-alpha-host"
+X
+run_cli install --manager apt
+check "adds profile tools" out_has '^install  df-gamma via apt'
+check "lets the profile replace a shared tool" out_has '^install  df-alpha via apt \(df-alpha-host\)$'
+check "lists a replaced tool once" test "$(grep -c 'df-alpha via' "$root/out")" -eq 1
+
+# Runtimes go through mise, after mise itself is installed.
+setup
+cat >>"$H/.dotfiles/packages.toml" <<'X'
+
+[df-runtime]
+mise = "df-runtime@1"
+X
+run_cli install --manager apt
+if ! command -v mise >/dev/null 2>&1; then
+  check "skips mise tools when mise can't be installed" out_has 'skipped df-runtime@1: mise'
+fi
+printf '\n[mise]\napt = "mise"\n' >>"$H/.dotfiles/packages.toml"
+run_cli install --manager apt
+check "plans mise tools when mise is planned" out_has '^would run  mise use -g df-runtime@1$'
+run_cli install --manager apt --yes
+check "installs mise first" logged 'sudo apt-get install -y df-alpha df-beta-tools mise'
+check "then the runtime" logged 'mise use -g df-runtime@1'
+rm -f "$FAKEBIN/mise"
+
+# Bad input.
+setup
+check "rejects an unknown manager" fails run_cli install --manager nope
+check "rejects an unknown option" fails run_cli install --force
+
+finish

@@ -50,11 +50,6 @@ commands:
 USAGE
 }
 
-not_implemented() {
-  err "$1: not implemented yet"
-  exit 2
-}
-
 # --- init -------------------------------------------------------------------
 
 # The repo path as written into blocks: relative to $HOME when it lives there,
@@ -165,41 +160,70 @@ read_profile() {
   printf '%s' "$profile"
 }
 
-# list_tools FILE...: print "name required bin [bin...]" per tool table in
-# packages.toml. required is 1 or 0; commands come from the `bin` key,
-# defaulting to the tool's name.
+# list_tools MANAGER FILE...: print one tab-separated line per tool in the
+# packages.toml files: name, required (1/0), commands, MANAGER's package and
+# mise spec, with "-" for an empty field. A table in a later file replaces
+# the same tool's table from an earlier one. Commands come from the `bin`
+# key, defaulting to the tool's name.
 list_tools() {
-  awk '
-    function flush() { if (name != "") print name, req, bins }
+  pm_=$1
+  shift
+  awk -v pm="$pm_" '
+    function flush() {
+      if (name == "") return
+      if (!(name in seen)) { order[++n] = name; seen[name] = 1 }
+      R[name] = req; B[name] = bins
+      P[name] = pkg == "" ? "-" : pkg; M[name] = mise == "" ? "-" : mise
+    }
     /^[[:space:]]*\[/ {
       flush()
-      name = $0; gsub(/[][[:space:]]/, "", name); bins = name; req = 0; next
+      name = $0; gsub(/[][[:space:]]/, "", name)
+      bins = name; req = 0; pkg = ""; mise = ""; next
     }
-    /^[[:space:]]*(bin|required)[[:space:]]*=/ {
+    name != "" && /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=/ {
       k = $0; sub(/^[[:space:]]*/, "", k); sub(/[[:space:]]*=.*/, "", k)
       v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]*#.*/, "", v)
       gsub(/"/, "", v)
-      if (k == "bin") bins = v; else req = (v == "true")
+      if (k == "bin") bins = v
+      else if (k == "required") req = (v == "true")
+      else if (k == "mise") mise = v
+      else if (k == pm) pkg = v
     }
-    END { flush() }' "$@"
+    END {
+      flush()
+      for (i = 1; i <= n; i++) {
+        t = order[i]
+        printf "%s\t%d\t%s\t%s\t%s\n", t, R[t], B[t], P[t], M[t]
+      }
+    }' "$@"
 }
 
-# missing_tools all|required: print the names of tools that aren't on PATH,
-# space-separated, from the shared and the profile's packages.toml.
-missing_tools() {
-  mode=$1
+# tools_for MANAGER: list_tools over the shared and the profile's packages.toml.
+tools_for() {
+  tpm=$1
   set -- "$DOTFILES_DIR/packages.toml"
   profile=$(read_profile)
   if [ -n "$profile" ] && [ -f "$DOTFILES_DIR/hosts/$profile/packages.toml" ]; then
     set -- "$@" "$DOTFILES_DIR/hosts/$profile/packages.toml"
   fi
-  missing=$(list_tools "$@" | while read -r tool req bins; do
+  list_tools "$tpm" "$@"
+}
+
+# has_any "CMD [CMD...]": true if any of the commands is on PATH.
+has_any() {
+  for b in $1; do
+    if command -v "$b" >/dev/null 2>&1; then return 0; fi
+  done
+  return 1
+}
+
+# missing_tools all|required: print the names of tools that aren't on PATH,
+# space-separated.
+missing_tools() {
+  mode=$1
+  missing=$(tools_for - | while IFS='	' read -r tool req bins _pkg _mise; do
     [ "$mode" = all ] || [ "$req" = 1 ] || continue
-    found=
-    for b in $bins; do
-      if command -v "$b" >/dev/null 2>&1; then found=1; break; fi
-    done
-    [ -n "$found" ] || printf '%s ' "$tool"
+    has_any "$bins" || printf '%s ' "$tool"
   done)
   printf '%s' "${missing% }"
 }
@@ -710,11 +734,129 @@ cmd_doctor() {
   [ "$ERRORS" -eq 0 ]
 }
 
+# --- install ----------------------------------------------------------------
+
+# detect_manager: print the package manager to use. macOS uses Homebrew;
+# Linux prefers the system manager, then Homebrew.
+detect_manager() {
+  if [ "$DOTFILES_OS" = darwin ]; then
+    set -- brew:brew
+  else
+    set -- apt-get:apt dnf:dnf pacman:pacman brew:brew
+  fi
+  for m in "$@"; do
+    if command -v "${m%%:*}" >/dev/null 2>&1; then
+      printf '%s' "${m#*:}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# run_step CMD...: print a command, and run it when applying.
+run_step() {
+  if [ "$apply" -eq 0 ]; then
+    say "would run  $*"
+    return 0
+  fi
+  say "run      $*"
+  "$@" || { err "install: command failed: $*"; return 1; }
+}
+
+cmd_install() {
+  apply=0 pm=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -y | --yes) apply=1; shift ;;
+      --manager) [ $# -ge 2 ] || die "--manager needs a name"; pm=$2; shift 2 ;;
+      --manager=*) pm=${1#--manager=}; shift ;;
+      -h | --help) say "usage: dotfiles install [--yes] [--manager brew|apt|dnf|pacman]"; return 0 ;;
+      *) die "install: unknown option: $1" ;;
+    esac
+  done
+
+  if [ -n "$pm" ]; then
+    case $pm in
+      brew | apt | dnf | pacman) ;;
+      *) die "install: unknown manager '$pm' (brew, apt, dnf or pacman)" ;;
+    esac
+  elif ! pm=$(detect_manager); then
+    if [ "$DOTFILES_OS" = darwin ]; then
+      die "install: Homebrew not found; install it from https://brew.sh, then re-run"
+    fi
+    die "install: no supported package manager found (apt, dnf, pacman or brew)"
+  fi
+  sudo=
+  if [ "$pm" != brew ] && [ "$(id -u)" -ne 0 ]; then
+    command -v sudo >/dev/null 2>&1 || die "install: $pm needs root, and sudo isn't available"
+    sudo=sudo
+  fi
+  say "manager  $pm${sudo:+ (with sudo)}"
+
+  TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
+  tools_for "$pm" >"$TMP/tools"
+  pkgs= specs= mise_planned=0
+  : >"$TMP/planned"
+  while IFS='	' read -r tool _req bins pkg mise; do
+    if has_any "$bins"; then
+      say "ok       $tool"
+    elif [ "$mise" != - ]; then
+      say "install  $tool via mise ($mise)"
+      specs="$specs $mise"
+      printf '%s\t%s\n' "$tool" "$bins" >>"$TMP/planned"
+    elif [ "$pkg" != - ]; then
+      say "install  $tool via $pm ($pkg)"
+      pkgs="$pkgs $pkg"
+      printf '%s\t%s\n' "$tool" "$bins" >>"$TMP/planned"
+      case " $bins " in *' mise '*) mise_planned=1 ;; esac
+    else
+      say "skip     $tool (no $pm package in packages.toml)"
+    fi
+  done <"$TMP/tools"
+
+  if [ -z "$pkgs$specs" ]; then
+    say "nothing to install"
+    return 0
+  fi
+
+  failed=0
+  if [ -n "$pkgs" ]; then
+    # Package names never contain spaces, so $pkgs is split on purpose.
+    case $pm in
+      brew) run_step brew install $pkgs ;;
+      apt) run_step $sudo apt-get update && run_step $sudo apt-get install -y $pkgs ;;
+      dnf) run_step $sudo dnf install -y $pkgs ;;
+      pacman) run_step $sudo pacman -S --needed --noconfirm $pkgs ;;
+    esac || failed=1
+  fi
+
+  # Runtimes go through mise, which may have been installed just above.
+  if [ -n "$specs" ]; then
+    if command -v mise >/dev/null 2>&1 || { [ "$apply" -eq 0 ] && [ "$mise_planned" -eq 1 ]; }; then
+      for spec in $specs; do
+        run_step mise use -g "$spec" || failed=1
+      done
+    else
+      warn "install: skipped${specs}: mise isn't installed and has no $pm package to install it"
+    fi
+  fi
+
+  if [ "$apply" -eq 0 ]; then
+    say "dry run; \`dotfiles install --yes\` applies it"
+    return 0
+  fi
+
+  # A package can install under a command name packages.toml doesn't list.
+  while IFS='	' read -r tool bins; do
+    has_any "$bins" || warn "install: $tool is still missing; none of '$bins' is on PATH (check its \`bin\` key)"
+  done <"$TMP/planned"
+  [ "$failed" -eq 0 ]
+}
+
 # --- other commands ---------------------------------------------------------
 
-cmd_install()   { not_implemented install; }
 cmd_test() {
-  for t in init uninstall doctor sync-env; do
+  for t in init uninstall doctor sync-env install; do
     sh "$DOTFILES_DIR/test/$t.sh" || return 1
   done
   exec sh "$DOTFILES_DIR/test/matrix.sh" "$@"
