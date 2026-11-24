@@ -124,6 +124,17 @@ The env layer runs in every shell, including the many non-interactive shells tha
 
 Changes take effect in new shells. To reload the current one, run `exec zsh` or `exec bash`.
 
+### Editing a layer safely
+
+A mistake in a layer breaks every new shell, and in `env.sh` it also breaks scripts: an `exit` makes every shell quit at startup, and a syntax error stops `sh` login shells. So:
+
+1. Keep one terminal open while you edit, in case new ones won't start.
+2. Run `dotfiles doctor`. It checks that every layer file parses, in each shell that loads it, including your profile's files.
+3. Run `dotfiles test`. It starts every kind of shell with your profile and fails on an `exit`, an error message, or output from a non-interactive shell.
+4. Then open a new terminal; that's also the only way to try `load-last.zsh`.
+
+If a new shell won't start, use the open terminal, or start one without startup files (`bash --noprofile --norc` or `zsh -f`), and undo the change with `git -C ~/.dotfiles restore <file>`. Moving the repo aside (`mv ~/.dotfiles ~/.dotfiles.off`) switches the config off everywhere at once; shells start without it.
+
 ### Adding a tool
 
 Add a table to `packages.toml`, or to `hosts/<profile>/packages.toml` for one profile:
@@ -180,7 +191,7 @@ A few values can't be written to that file exactly, such as ones containing `$` 
 
 ## Troubleshooting
 
-- **Something doesn't load:** run `DOTFILES_TRACE=1 zsh -ic exit` (or `bash -ic exit`) to see which repo files load, then `dotfiles doctor`.
+- **Something doesn't load:** run `DOTFILES_TRACE=1 zsh -ic exit` (or `bash -ic exit`) to see which repo files load, then `dotfiles doctor`, which also reports layer files that don't parse.
 - **A setting works in a terminal but not in a script:** it's probably in an interactive layer. Move it to `env.sh` if scripts need it.
 - **The repo is missing or moved:** shells still start normally, without the repo's config. Run `dotfiles init` from the repo's new location.
 - **Startup is slow:** look for `$(...)` or `eval` in your profile's files and below the blocks.

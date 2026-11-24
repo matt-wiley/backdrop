@@ -71,6 +71,7 @@ dotfiles/
   test/
     matrix.sh               # load matrix
     init.sh uninstall.sh doctor.sh sync-env.sh install.sh   # CLI suites
+    faults.sh               # broken layers must be caught
     lib.sh                  # helpers shared by the CLI suites
   .github/workflows/test.yml
   .gitignore                # keeps host secrets files out of the repo
@@ -183,7 +184,7 @@ A single POSIX `sh` script, `bin/dotfiles`, with six commands, each accepting `-
 | `install [--yes] [--manager NAME]` | Installs missing tools from `packages.toml` (see below). Dry run without `--yes`. |
 | `doctor [--diff]` | Reports health and drift for each entry file (see Doctor checks). Exit code is non-zero on any error. |
 | `sync-env` | Linux only; an error on macOS. Writes `~/.config/environment.d/dotfiles.conf` from the variables the `~/.profile` block exports (see below). Takes effect at next login. |
-| `test [--profile]` | Runs the CLI test suites, then the matrix (see Testing); `--profile` adds a zsh startup profile. |
+| `test [--profile]` | Runs the CLI test suites, then the matrix (see Testing) with this machine's profile; `--profile` adds a zsh startup profile. |
 | `uninstall` | Removes every block (see injection rule 6) and `environment.d/dotfiles.conf`. Leaves the selector, caches and machine content, and says so. |
 
 ### Install command
@@ -204,6 +205,7 @@ A single POSIX `sh` script, `bin/dotfiles`, with six commands, each accepting `-
 
 - **Error:** entry file missing, block missing, block not first (the first line that is neither blank nor a shebang isn't the opening marker), more than one block, or an unterminated or nested block.
 - **Error:** `DOTFILES_DIR` does not exist, or a file the block always sources is missing, including `sh/lib.sh`, which `env.sh` needs.
+- **Error:** a layer file doesn't parse (`-n`) in a shell that loads it: the env layer files in `sh`, bash and zsh; `interactive.sh` in bash and zsh; each rc file in its own shell. The selected profile's files are checked too. Shells that aren't installed are skipped.
 - **Warning:** block version older or newer than the repo's.
 - **Warning:** block edited inside the markers (it differs from what `init` would write), or `DOTFILES_DIR` points at a different copy of the repo.
 - **Warning:** selector missing, or it names a profile with no directory.
@@ -227,7 +229,7 @@ A trace mode plus a matrix script prove which files load in each shell, and CLI 
 
 **Trace mode:** with `DOTFILES_TRACE=1`, every repo file appends its name to stderr as it loads. Off by default; a single variable test per file when off.
 
-**Matrix:** `test/matrix.sh` runs each invocation under `env -i` in a scratch `HOME` with blocks injected by `init`, captures the trace, and asserts the expected layers and `PATH` entries.
+**Matrix:** `test/matrix.sh` runs each invocation under `env -i` in a scratch `HOME` with blocks injected by `init`, with a probe command (`echo @df@ran`). It captures stdout, stderr and the trace, and asserts the expected layers and `PATH` entries. It loads a host profile too: `DOTFILES_TEST_PROFILE`, which `dotfiles test` sets to this machine's profile, or `example`. If `init` fails but writes the blocks (as when `sync-env` meets a broken env layer), the matrix records the failure and still tests every shell.
 
 | Invocation | Expected layers |
 | --- | --- |
@@ -245,12 +247,14 @@ A trace mode plus a matrix script prove which files load in each shell, and CLI 
 **Extra assertions**
 
 - `PATH` has no duplicates and the repo's entries come before system ones, on macOS too.
-- No output on stdout from any non-interactive invocation.
+- The probe command runs in every invocation, so no layer exits or stops the shell.
+- No output on stdout from any non-interactive invocation, other than the probe's.
+- Nothing on stderr but trace lines and bash's notices about running without a terminal, so syntax errors, failing commands and noise all fail the matrix.
 - `env -i HOME=… zsh -c` still gets the env layer; every matrix row runs under `env -i`, so the `zsh -c` row covers it.
 - A block with a missing repo produces no error.
 - Startup time for `zsh -ic exit` stays under 100 ms, the median of 10 runs with `hyperfine`. CI warns above 100 ms and fails above 200 ms, since shared runners are noisy. `dotfiles test --profile` loads `zsh/zprof` to show what is slow.
 
-**CLI suites:** `test/init.sh`, `test/uninstall.sh`, `test/doctor.sh`, `test/sync-env.sh` and `test/install.sh` run each command against scratch home directories holding a copy of the repo at `~/.dotfiles`.
+**CLI suites:** `test/init.sh`, `test/uninstall.sh`, `test/doctor.sh`, `test/sync-env.sh` and `test/install.sh` run each command against scratch home directories holding a copy of the repo at `~/.dotfiles`. `test/faults.sh` breaks one layer file at a time in a copy (an `exit`, a syntax error, a failing command, output), and checks that the matrix fails and that `doctor` reports syntax errors.
 
 - `install` runs against fake package managers and a fake `sudo` that only log their arguments; nothing is installed.
 - On Linux, `sync-env` output is also read back with systemd's own `environment.d` generator when it is present.
@@ -287,3 +291,4 @@ Everything above is implemented except:
   - The matrix asserts layers but not `PATH` entries.
   - Not implemented: the `PATH` duplicate and order assertion, the missing-repo assertion, the `hyperfine` startup budget and its CI thresholds.
   - `dotfiles test --profile` is accepted but does nothing.
+  - Nothing checks the "no shell options" rule: `set -u` in the env layer leaks into every shell without failing any test.

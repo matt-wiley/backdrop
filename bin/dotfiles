@@ -714,6 +714,39 @@ doctor_local() {
   done
 }
 
+# parse_check "SHELL..." FILE...: report an error for each repo-relative FILE
+# that one of the shells can't parse. Missing files and shells are skipped.
+parse_check() {
+  shells=$1
+  shift
+  for f in "$@"; do
+    [ -f "$DOTFILES_DIR/$f" ] || continue
+    for sh in $shells; do
+      command -v "$sh" >/dev/null 2>&1 || continue
+      if ! msg=$("$sh" -n "$DOTFILES_DIR/$f" 2>&1); then
+        # First line of the message, with the repo path trimmed.
+        msg=$(printf '%s\n' "$msg" | awk -v p="$DOTFILES_DIR/" '
+          { while ((i = index($0, p))) $0 = substr($0, 1, i - 1) substr($0, i + length(p)); print; exit }')
+        report error "$f does not parse in $sh: $msg"
+        break
+      fi
+    done
+  done
+}
+
+# doctor_layers: syntax-check every layer file with each shell that loads it,
+# including the selected profile's files.
+doctor_layers() {
+  say "layers"
+  before=$((ERRORS + WARNINGS))
+  host=hosts/$(read_profile)
+  parse_check "sh bash zsh" sh/lib.sh sh/env.sh sh/os/linux.sh sh/os/darwin.sh "$host/env.sh"
+  parse_check "bash zsh" sh/interactive.sh "$host/interactive.sh"
+  parse_check bash bash/rc.bash "$host/rc.bash"
+  parse_check zsh zsh/rc.zsh zsh/load-last.zsh "$host/rc.zsh"
+  [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "every layer file parses"
+}
+
 cmd_doctor() {
   diff_mode=0
   case ${1-} in
@@ -728,6 +761,7 @@ cmd_doctor() {
   for pair in $ENTRY_FILES; do
     doctor_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$HOME/${pair#*:}"
   done
+  doctor_layers
   doctor_general
   doctor_local "$diff_mode"
 
@@ -860,9 +894,15 @@ cmd_install() {
 # --- other commands ---------------------------------------------------------
 
 cmd_test() {
-  for t in init uninstall doctor sync-env install; do
+  for t in init uninstall doctor sync-env install faults; do
     sh "$DOTFILES_DIR/test/$t.sh" || return 1
   done
+  # Load this machine's profile in the matrix, so its host files are tested too.
+  profile=$(read_profile)
+  if [ -n "$profile" ] && [ -d "$DOTFILES_DIR/hosts/$profile" ]; then
+    DOTFILES_TEST_PROFILE=$profile
+    export DOTFILES_TEST_PROFILE
+  fi
   exec sh "$DOTFILES_DIR/test/matrix.sh" "$@"
 }
 
