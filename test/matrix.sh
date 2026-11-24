@@ -3,6 +3,7 @@
 # Each invocation runs in a scratch HOME with the blocks injected and
 # DOTFILES_TRACE=1; the trace is reduced to layer names and compared.
 set -u
+unset XDG_CONFIG_HOME XDG_CACHE_HOME # keep init in the scratch HOME
 
 repo=$(cd "$(dirname "$0")/.." && pwd -P)
 scratch=$(mktemp -d)

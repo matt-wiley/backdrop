@@ -3,6 +3,10 @@
 # the default clone path, and its own empty skeleton dir.
 set -u
 
+# The CLI honors these; left set, tests would read and write the real
+# ~/.config and ~/.cache instead of the scratch HOME's.
+unset XDG_CONFIG_HOME XDG_CACHE_HOME
+
 repo=$(cd "$(dirname "$0")/.." && pwd -P)
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT INT TERM
@@ -11,7 +15,15 @@ n=0
 H=
 
 pass() { printf 'ok    %s: %s\n' "$SUITE" "$1"; }
-fail() { printf 'FAIL  %s: %s\n' "$SUITE" "$1"; nfail=$((nfail + 1)); }
+fail() {
+  printf 'FAIL  %s: %s\n' "$SUITE" "$1"
+  nfail=$((nfail + 1))
+  # Show the last CLI output once per run of it, to explain the failure.
+  if [ -s "$root/out" ] && ! cmp -s "$root/out" "$root/out.shown"; then
+    sed 's/^/      > /' "$root/out"
+    cp "$root/out" "$root/out.shown"
+  fi
+}
 check() { # check DESCRIPTION COMMAND...
   desc=$1; shift
   if "$@"; then pass "$desc"; else fail "$desc"; fi
