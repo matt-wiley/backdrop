@@ -90,6 +90,8 @@ dotfiles install --yes    # does it
 
 ## Where to put a setting
 
+This is a quick reference. [Editing the layers](editing-layers.md) has examples for each kind of change.
+
 | You want | Put it in | Notes |
 | --- | --- | --- |
 | An environment variable or `PATH` entry, everywhere | `sh/env.sh` | Reaches every shell, including scripts and `ssh host cmd` |
