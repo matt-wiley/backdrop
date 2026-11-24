@@ -6,6 +6,8 @@ Changes in each release. Versions follow [semantic versioning](https://semver.or
 
 ## Unreleased
 
+## 1.0.0 - 2026-11-23
+
 ### Added
 
 - Environment, shared interactive and shell-specific layers for bash, zsh and POSIX `sh`, with per-machine profiles in `hosts/`.
