@@ -1,3 +1,3 @@
-# hosts/example/rc.zsh: overrides for the "example" profile.
+# hosts/example/rc.zsh: overrides for this profile (copy hosts/example to start a new one).
 # Sourced right after the shared file of the same layer.
-_df_trace hosts/example/rc.zsh
+_df_trace "hosts/${DOTFILES_PROFILE-}/rc.zsh"

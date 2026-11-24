@@ -1,3 +1,3 @@
-# hosts/example/env.sh: overrides for the "example" profile.
+# hosts/example/env.sh: overrides for this profile (copy hosts/example to start a new one).
 # Sourced right after the shared file of the same layer.
-_df_trace hosts/example/env.sh
+_df_trace "hosts/${DOTFILES_PROFILE-}/env.sh"
