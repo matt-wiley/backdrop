@@ -1,5 +1,5 @@
 #!/bin/sh
-# dotfiles: manage injected shell blocks. See docs/user/getting-started.md and docs/developer/specs/dotfiles-system-spec.md.
+# dotfiles: manage injected shell blocks. See docs/user/01-getting-started.md and docs/developer/specs/dotfiles-system-spec.md.
 set -eu
 
 # Resolve the repo through any symlink to this script (e.g. ~/.local/bin/dotfiles).

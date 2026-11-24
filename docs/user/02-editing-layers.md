@@ -1,6 +1,6 @@
 # Editing the layers
 
-This guide shows how to change each part of the config, with an example for each kind of change. If you haven't set up a machine yet, start with [Getting started](getting-started.md).
+This guide shows how to change each part of the config, with an example for each kind of change. If you haven't set up a machine yet, start with [Getting started](01-getting-started.md).
 
 Every example here was added to a copy of the repo and checked in real shells.
 
@@ -31,7 +31,7 @@ Edits take effect in the next shell that starts; there's no build step. A mistak
 4. Open a new terminal to see the change, or reload the current shell with `exec zsh` or `exec bash`.
 5. On Linux, if you changed an env layer file, run `dotfiles sync-env` so desktop apps get the change at your next login.
 
-If a new shell won't start, see [Editing a layer safely](getting-started.md#editing-a-layer-safely).
+If a new shell won't start, see [Editing a layer safely](01-getting-started.md#editing-a-layer-safely).
 
 ## Layer 1: environment
 
@@ -91,7 +91,7 @@ export SSH_AUTH_SOCK="${XDG_RUNTIME_DIR:-/run/user/0}/ssh-agent.socket"
 
 ### Secrets
 
-Not in this layer, unless non-interactive shells really need them: on Linux, `sync-env` copies everything this layer exports into a file in `~/.config`. See [Secrets](getting-started.md#secrets).
+Not in this layer, unless non-interactive shells really need them: on Linux, `sync-env` copies everything this layer exports into a file in `~/.config`. See [Secrets](01-getting-started.md#secrets).
 
 ## Layer 2: shared interactive
 
@@ -291,7 +291,7 @@ dotfiles install
 dotfiles install --yes
 ```
 
-The full set of keys is in [Adding a tool](getting-started.md#adding-a-tool).
+The full set of keys is in [Adding a tool](01-getting-started.md#adding-a-tool).
 
 ## Files to leave alone
 

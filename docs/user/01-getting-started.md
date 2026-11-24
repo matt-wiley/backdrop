@@ -90,7 +90,7 @@ dotfiles install --yes    # does it
 
 ## Where to put a setting
 
-This is a quick reference. [Editing the layers](editing-layers.md) has examples for each kind of change.
+This is a quick reference. [Editing the layers](02-editing-layers.md) has examples for each kind of change.
 
 | You want | Put it in | Notes |
 | --- | --- | --- |
