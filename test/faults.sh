@@ -25,7 +25,11 @@ check "says the command never ran" out_has 'command never ran'
 setup
 append sh/env.sh 'if then'
 check "matrix fails on a syntax error in env.sh" fails run_matrix
-check "says sh -lc never ran" out_has '^FAIL  sh -lc .*command never ran'
+# dash (Debian, Ubuntu) stops at the error; bash as sh (macOS) reports it and goes on.
+check "fails sh -lc" out_has '^FAIL  sh -lc '
+if [ "$(readlink -f /bin/sh 2>/dev/null)" = /usr/bin/dash ]; then
+  check "says dash never ran the command" out_has '^FAIL  sh -lc .*command never ran'
+fi
 check "shows the error" out_has '^      > .*env\.sh'
 check "doctor fails on it" fails run_doctor
 check "doctor names the file and shell" out_has 'error  sh/env.sh does not parse in sh: '

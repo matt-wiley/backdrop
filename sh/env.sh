@@ -16,6 +16,11 @@ if [ -r "$DOTFILES_DIR/sh/os/$DOTFILES_OS.sh" ]; then
   . "$DOTFILES_DIR/sh/os/$DOTFILES_OS.sh"
 fi
 
+# zsh: Ubuntu's /etc/zsh/zshrc runs its own uncached compinit unless this is
+# set before it, in ~/.zshenv. rc.zsh runs compinit with a cache instead.
+# A plain shell variable, harmless in sh and bash.
+skip_global_compinit=1
+
 # Machine profile, named in an unversioned selector file. Not exported:
 # every shell re-reads it through its own block.
 DOTFILES_PROFILE=

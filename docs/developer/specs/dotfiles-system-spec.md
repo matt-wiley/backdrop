@@ -169,7 +169,7 @@ The env layer must be safe to run anywhere, any number of times; the interactive
 - Guarded on `$-` containing `i`.
 - Detect tools, not OS: `_df_has fdfind && alias fd=fdfind`.
 - Tool init output (starship, zoxide, fzf) is cached under `~/.cache/dotfiles/` and regenerated when the tool binary changes.
-- `compinit` uses its cache (`-C`) and rebuilds the dump, `~/.cache/dotfiles/zcompdump`, at most once a day.
+- `compinit` uses its cache (`-C`) and rebuilds the dump, `~/.cache/dotfiles/zcompdump`, at most once a day. `env.sh` sets `skip_global_compinit=1` (a plain shell variable, not exported) so Ubuntu's `/etc/zsh/zshrc` doesn't run a second, uncached `compinit`; without it, that `compinit` roughly doubled zsh startup and aborted with an error on systems whose completion directories it considers insecure.
 - A missing tool is skipped quietly; it never prints an error at startup.
 - No aliases or functions that shadow builtins or common commands (`cd`, `ls`, `cat`, `grep`, `find`); use distinct names such as `z`, `ll` and `bat`.
 - Human-only conveniences sit in a section of `interactive.sh` that is skipped when an agent is detected (`CLAUDECODE=1` for Claude Code; verify the variable on install).

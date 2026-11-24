@@ -126,7 +126,7 @@ Changes take effect in new shells. To reload the current one, run `exec zsh` or 
 
 ### Editing a layer safely
 
-A mistake in a layer breaks every new shell, and in `env.sh` it also breaks scripts: an `exit` makes every shell quit at startup, and a syntax error stops `sh` login shells. So:
+A mistake in a layer breaks every new shell, and in `env.sh` it also breaks scripts: an `exit` makes every shell quit at startup, and a syntax error stops `sh` login shells where `sh` is dash, as on Debian and Ubuntu. So:
 
 1. Keep one terminal open while you edit, in case new ones won't start.
 2. Run `dotfiles doctor`. It checks that every layer file parses, in each shell that loads it, including your profile's files.
