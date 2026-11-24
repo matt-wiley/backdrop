@@ -149,13 +149,13 @@ gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId -
 
 ```sh
 gh release view v0.2.0                    # notes, and three files attached
-curl -fsSL https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | grep '^RELEASE_VERSION='
+curl -fsSL https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | grep '^RELEASE_VERSION='
 ```
 
 To try the installer end to end without touching your own setup, give it a throwaway home directory:
 
 ```sh
-curl -fsSL https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | HOME=$(mktemp -d) sh -s -- --no-init
+curl -fsSL https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | HOME=$(mktemp -d) sh -s -- --no-init
 ```
 
 Anonymous downloads only work while the repository is public.
@@ -173,7 +173,7 @@ The release's files:
 
 | File | What it is |
 | --- | --- |
-| `mobua-bohr-vX.Y.Z.zip` | The repo as committed at the tag, in a `mobua-bohr-vX.Y.Z/` folder. Built with `git archive`, so uncommitted and ignored files are never included. |
+| `backdrop-vX.Y.Z.zip` | The repo as committed at the tag, in a `backdrop-vX.Y.Z/` folder. Built with `git archive`, so uncommitted and ignored files are never included. |
 | `install.sh` | The repo's `install.sh`, with `RELEASE_VERSION` set to `X.Y.Z` |
 | `SHA256SUMS` | SHA-256 checksums of the two files above; the installer refuses a ZIP that doesn't match |
 
@@ -183,7 +183,7 @@ The README's `releases/latest/download/install.sh` URL always serves the newest 
 
 ```sh
 scripts/build-release.sh    # writes dist/, which git ignores
-HOME=$(mktemp -d) sh dist/install.sh --zip "dist/mobua-bohr-v$(cat VERSION).zip"
+HOME=$(mktemp -d) sh dist/install.sh --zip "dist/backdrop-v$(cat VERSION).zip"
 ```
 
 The build uses `HEAD`, so commit first. The throwaway `HOME` matters: the installer links `~/.local/bin/dotfiles` and runs `dotfiles init`, which would otherwise change your own setup.

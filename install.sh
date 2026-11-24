@@ -1,8 +1,8 @@
 #!/bin/sh
 # install.sh: install a dotfiles release without git.
 #
-#   curl -fsSL https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | sh
-#   wget -qO- https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | sh
+#   wget -qO- https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | sh
 #
 # Pass options after `sh -s --`, for example: ... | sh -s -- --profile laptop
 #
@@ -11,8 +11,8 @@
 # Everything runs inside main(), called on the last line, so a download cut
 # short never runs half a script.
 
-REPO=matt-wiley/mobua-bohr
-NAME=mobua-bohr
+REPO=matt-wiley/backdrop
+NAME=backdrop
 RELEASE_VERSION=@VERSION@ # stamped by scripts/build-release.sh
 
 usage() {

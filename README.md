@@ -1,4 +1,4 @@
-# mobua-bohr
+# backdrop
 
 Shell dotfiles for bash, zsh and POSIX `sh` on Linux and macOS: each setting is written once, and a small injected block at the top of each startup file loads it.
 
@@ -9,13 +9,13 @@ You need Linux or macOS, and curl or wget. git isn't needed.
 With curl:
 
 ```sh
-curl -fsSL https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | sh
 ```
 
 With wget:
 
 ```sh
-wget -qO- https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | sh
+wget -qO- https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | sh
 ```
 
 The installer downloads the latest release, checks its SHA-256 checksum, installs it in `~/.dotfiles`, links the `dotfiles` command into `~/.local/bin`, and runs `dotfiles init`. Then open a new terminal and run `dotfiles doctor`.
@@ -25,8 +25,8 @@ The installer downloads the latest release, checks its SHA-256 checksum, install
 Pass options after `sh -s --`:
 
 ```sh
-curl -fsSL https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | sh -s -- --profile laptop
-wget -qO- https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | sh -s -- --profile laptop
+curl -fsSL https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | sh -s -- --profile laptop
+wget -qO- https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | sh -s -- --profile laptop
 ```
 
 | Option | Does |
@@ -42,18 +42,18 @@ wget -qO- https://github.com/matt-wiley/mobua-bohr/releases/latest/download/inst
 Replace `latest/download` with `download/vX.Y.Z` in the URL:
 
 ```sh
-curl -fsSL https://github.com/matt-wiley/mobua-bohr/releases/download/v0.1.0/install.sh | sh
-wget -qO- https://github.com/matt-wiley/mobua-bohr/releases/download/v0.1.0/install.sh | sh
+curl -fsSL https://github.com/matt-wiley/backdrop/releases/download/v0.1.0/install.sh | sh
+wget -qO- https://github.com/matt-wiley/backdrop/releases/download/v0.1.0/install.sh | sh
 ```
 
-Every release on the [releases page](https://github.com/matt-wiley/mobua-bohr/releases) has the versioned ZIP of the repo, its `install.sh` and a `SHA256SUMS` file.
+Every release on the [releases page](https://github.com/matt-wiley/backdrop/releases) has the versioned ZIP of the repo, its `install.sh` and a `SHA256SUMS` file.
 
 ### Read the script first
 
 To look at the installer before running it, download it, then run it with the same options:
 
 ```sh
-curl -fsSLO https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh
+curl -fsSLO https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh
 less install.sh
 sh install.sh --profile laptop
 ```
@@ -67,7 +67,7 @@ Run the install command again. The previous install moves to `~/.dotfiles.previo
 To keep your own changes under version control, clone the repo instead of using a release:
 
 ```sh
-git clone https://github.com/matt-wiley/mobua-bohr.git ~/.dotfiles
+git clone https://github.com/matt-wiley/backdrop.git ~/.dotfiles
 ~/.dotfiles/bin/dotfiles init
 ```
 

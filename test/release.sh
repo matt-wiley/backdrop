@@ -38,7 +38,7 @@ build() {
 check "builds a release" build 9.9.9
 build 9.9.10
 build 9.9.11
-printf 'x' >>"$srv/v9.9.11/mobua-bohr-v9.9.11.zip" # corrupt: checksum must fail
+printf 'x' >>"$srv/v9.9.11/backdrop-v9.9.11.zip" # corrupt: checksum must fail
 
 python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$srv" >"$root/http.log" 2>&1 &
 server=$!
@@ -55,12 +55,12 @@ base=http://127.0.0.1:$port
 
 # Build output.
 d=$srv/v9.9.9
-check "writes the ZIP, install.sh and SHA256SUMS" test -f "$d/mobua-bohr-v9.9.9.zip" -a -f "$d/install.sh" -a -f "$d/SHA256SUMS"
+check "writes the ZIP, install.sh and SHA256SUMS" test -f "$d/backdrop-v9.9.9.zip" -a -f "$d/install.sh" -a -f "$d/SHA256SUMS"
 check "stamps the version into install.sh" grep -q '^RELEASE_VERSION=9.9.9 ' "$d/install.sh"
 check "SHA256SUMS matches the files" sh -c 'cd "$1" && { sha256sum -c SHA256SUMS || shasum -a 256 -c SHA256SUMS; } >/dev/null 2>&1' _ "$d"
-python3 -c 'import sys, zipfile; print("\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))' "$d/mobua-bohr-v9.9.9.zip" >"$root/list"
-check "puts the repo under a versioned folder" grep -qx 'mobua-bohr-v9.9.9/bin/dotfiles' "$root/list"
-check "includes the version file" grep -qx 'mobua-bohr-v9.9.9/VERSION' "$root/list"
+python3 -c 'import sys, zipfile; print("\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))' "$d/backdrop-v9.9.9.zip" >"$root/list"
+check "puts the repo under a versioned folder" grep -qx 'backdrop-v9.9.9/bin/dotfiles' "$root/list"
+check "includes the version file" grep -qx 'backdrop-v9.9.9/VERSION' "$root/list"
 
 # pipe FETCHER VERSION [ARGS...]: download VERSION's install.sh and pipe it
 # into sh, as the README does, in the scratch HOME.
@@ -124,7 +124,7 @@ run_script() {
   HOME=$H DOTFILES_RELEASE_BASE=http://127.0.0.1:9 sh "$script" "$@" >"$root/out" 2>&1
 }
 newhome
-check "--zip installs without the network" run_script "$d/install.sh" --zip "$d/mobua-bohr-v9.9.9.zip" --no-init
+check "--zip installs without the network" run_script "$d/install.sh" --zip "$d/backdrop-v9.9.9.zip" --no-init
 check "installs from the ZIP" test "$(cat "$H/.dotfiles/VERSION" 2>/dev/null)" = 9.9.9
 
 # Refusals: nothing is installed, nothing is touched.

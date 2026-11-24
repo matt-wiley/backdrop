@@ -26,8 +26,8 @@ There are two ways to get the files:
 To install a release, run the installer with curl or wget. It also does steps 2 and 4 below for you:
 
 ```sh
-curl -fsSL https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | sh
-wget -qO- https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | sh
+wget -qO- https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | sh
 ```
 
 The [README](../../README.md#install) lists its options, how to install a specific version and how to upgrade.
@@ -35,7 +35,7 @@ The [README](../../README.md#install) lists its options, how to install a specif
 To clone instead:
 
 ```sh
-git clone https://github.com/matt-wiley/mobua-bohr.git ~/.dotfiles
+git clone https://github.com/matt-wiley/backdrop.git ~/.dotfiles
 ```
 
 `~/.dotfiles` is the default location, but any path works: `init` writes the repo's location into the blocks. If you move the repo later, run `dotfiles init` again from the new location.

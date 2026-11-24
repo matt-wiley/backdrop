@@ -2,7 +2,7 @@
 # scripts/build-release.sh [OUTDIR]: build the release files for HEAD.
 #
 # Writes to OUTDIR (default: dist/):
-#   mobua-bohr-vX.Y.Z.zip   the whole repo at HEAD, under mobua-bohr-vX.Y.Z/
+#   backdrop-vX.Y.Z.zip   the whole repo at HEAD, under backdrop-vX.Y.Z/
 #   install.sh              the installer, stamped with X.Y.Z
 #   SHA256SUMS              checksums of both
 # X.Y.Z comes from VERSION as committed at HEAD; uncommitted changes are left out.
@@ -10,7 +10,7 @@ set -eu
 
 repo=$(cd "$(dirname "$0")/.." && pwd -P)
 out=${1:-$repo/dist}
-name=mobua-bohr
+name=backdrop
 
 git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || {
   echo "build-release: $repo is not a git repository" >&2

@@ -237,7 +237,7 @@ A single POSIX `sh` script, `bin/dotfiles`, with seven commands, each accepting 
 
 A release lets a machine install the dotfiles without git. Each one is a GitHub Release, tagged `vX.Y.Z`, with three files:
 
-- `mobua-bohr-vX.Y.Z.zip`: the repo as committed at the tag, built with `git archive`, in a `mobua-bohr-vX.Y.Z/` folder.
+- `backdrop-vX.Y.Z.zip`: the repo as committed at the tag, built with `git archive`, in a `backdrop-vX.Y.Z/` folder.
 - `install.sh`: the repo's installer with its `RELEASE_VERSION` set to `X.Y.Z`.
 - `SHA256SUMS`: checksums of both.
 
