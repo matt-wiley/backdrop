@@ -472,6 +472,7 @@ cmd_uninstall() {
 # --- doctor -----------------------------------------------------------------
 
 # Names that interactive config must not shadow, on top of each shell's builtins.
+# Flattened before use: BSD awk rejects newlines in -v values.
 COMMON_COMMANDS='awk cat cd chmod cp curl cut diff du echo env find git grep head
 kill less ln ls make man mkdir mv ps pwd rm rmdir sed sort ssh tail tar test
 touch tr wc which xargs'
@@ -627,7 +628,7 @@ shadow_names() {
   # Prefix probe lines so stray output from rc files can't be mistaken for names.
   "$1" -ic "{ $probe; } | sed 's/^/@df@ /'" </dev/null 2>/dev/null |
     sed -n 's/^@df@ //p' |
-    awk -v common="$COMMON_COMMANDS" '
+    awk -v common="$(printf '%s' "$COMMON_COMMANDS" | tr '\n' ' ')" '
       BEGIN { n = split(common, c, /[[:space:]]+/); for (i = 1; i <= n; i++) bad[c[i]] = 1 }
       $1 == "B" { bad[$2] = 1; next }
       { seen[NR] = $0 }
@@ -667,7 +668,10 @@ doctor_general() {
 
   for sh in bash zsh; do
     command -v "$sh" >/dev/null 2>&1 || continue
-    shadow_names "$sh" >"$TMP/shadow"
+    if ! shadow_names "$sh" >"$TMP/shadow"; then
+      report warn "$sh: could not list aliases and functions to check for shadowing"
+      continue
+    fi
     while read -r kind word; do
       report warn "$sh: $kind '$word' shadows a builtin or common command"
     done <"$TMP/shadow"
