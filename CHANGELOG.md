@@ -6,6 +6,8 @@ Changes in each release. Versions follow [semantic versioning](https://semver.or
 
 ## Unreleased
 
+## 1.0.1 - 2026-11-23
+
 ### Fixed
 
 - Releases publish again. The release workflow's tests failed whenever the changelog's Unreleased section was empty, as it always is right after a release, so v1.0.0 was tagged but never published. Use v1.0.1.
