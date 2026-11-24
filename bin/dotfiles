@@ -2,8 +2,39 @@
 # dotfiles: manage injected shell blocks. See docs/specs/dotfiles-system-spec.md.
 set -eu
 
-DOTFILES_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
+# Resolve the repo through any symlink to this script (e.g. ~/.local/bin/dotfiles).
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+  esac
+done
+DOTFILES_DIR=$(cd "$(dirname "$self")/.." && pwd -P)
 export DOTFILES_DIR
+
+case $(uname -s) in
+  Darwin) DOTFILES_OS=darwin ;;
+  *) DOTFILES_OS=linux ;;
+esac
+
+SELECTOR=$HOME/.config/dotfiles/host
+CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles
+SKEL_DIR=${DOTFILES_SKEL_DIR:-/etc/skel} # overridable for tests
+
+# template:target pairs, one per shell entry file.
+ENTRY_FILES='profile:.profile bash_profile:.bash_profile bashrc:.bashrc zshenv:.zshenv zprofile:.zprofile zshrc:.zshrc'
+
+TMP=
+cleanup() { [ -z "$TMP" ] || rm -rf "$TMP"; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+say() { printf '%s\n' "$*"; }
+warn() { printf 'dotfiles: warning: %s\n' "$*" >&2; }
+err() { printf 'dotfiles: %s\n' "$*" >&2; }
+die() { err "$*"; exit 1; }
 
 usage() {
   cat <<USAGE
@@ -20,16 +51,208 @@ USAGE
 }
 
 not_implemented() {
-  printf 'dotfiles: %s: not implemented yet\n' "$1" >&2
+  err "$1: not implemented yet"
   exit 2
 }
 
-cmd_init()      { not_implemented init; }
+# --- init -------------------------------------------------------------------
+
+# The repo path as written into blocks: relative to $HOME when it lives there,
+# so the block survives a renamed home directory.
+block_dir() {
+  case $DOTFILES_DIR in
+    *'"'* | *'\'* | *'`'* | *'$'*)
+      die "repo path contains a character that can't be written into a block: $DOTFILES_DIR" ;;
+  esac
+  home_real=$(cd "$HOME" && pwd -P)
+  case $DOTFILES_DIR in
+    "$home_real") printf '%s' '$HOME' ;;
+    "$home_real"/*) printf '%s' "\$HOME/${DOTFILES_DIR#"$home_real"/}" ;;
+    *) printf '%s' "$DOTFILES_DIR" ;;
+  esac
+}
+
+# render_block TEMPLATE DIR: print the template with @DOTFILES_DIR@ replaced.
+render_block() {
+  awk -v dir="$2" '{
+    i = index($0, "@DOTFILES_DIR@")
+    if (i) $0 = substr($0, 1, i - 1) dir substr($0, i + 14)
+    print
+  }' "$1"
+}
+
+# splice BLOCKFILE SOURCE: print SOURCE with every existing dotfiles block
+# removed and BLOCKFILE placed first (after a shebang, if any).
+# Exits 3 if SOURCE has an unterminated or nested block.
+splice() {
+  awk -v blockfile="$1" '
+    BEGIN { while ((getline line < blockfile) > 0) block = block line "\n" }
+    NR == 1 && /^#!/ { shebang = $0 "\n"; next }
+    /^# >>> dotfiles / { if (inblock) bad = 1; inblock = 1; next }
+    inblock && $0 == "# <<< dotfiles <<<" { inblock = 0; next }
+    inblock { next }
+    { rest[++n] = $0 }
+    END {
+      if (inblock || bad) exit 3
+      printf "%s%s", shebang, block
+      if (n > 0 && rest[1] != "") print ""
+      for (i = 1; i <= n; i++) print rest[i]
+    }' "$2"
+}
+
+# inject_file TEMPLATE TARGET DIR: returns non-zero if TARGET was left alone
+# because of a problem.
+inject_file() {
+  tmpl=$1 target=$2 name=${2##*/}
+  render_block "$tmpl" "$3" >"$TMP/block"
+
+  if [ -L "$target" ] && [ ! -e "$target" ]; then
+    err "$target is a broken symlink; skipped"
+    return 1
+  fi
+  if [ ! -e "$target" ]; then
+    cat "$TMP/block" >"$target"
+    say "created  $target"
+    return 0
+  fi
+  if [ ! -f "$target" ]; then
+    err "$target is not a regular file; skipped"
+    return 1
+  fi
+
+  source=$target
+  if ! grep -q '^# >>> dotfiles ' "$target" && [ "$DOTFILES_OS" = linux ] &&
+    [ -f "$SKEL_DIR/$name" ] && cmp -s "$target" "$SKEL_DIR/$name"; then
+    [ -e "$target.dist" ] || cp -p "$target" "$target.dist"
+    say "backup   $target -> $target.dist (distro skeleton)"
+    source=/dev/null
+  fi
+
+  status=0
+  splice "$TMP/block" "$source" >"$TMP/new" || status=$?
+  if [ "$status" -eq 3 ]; then
+    err "$target has an unterminated or nested dotfiles block; fix it by hand. Skipped"
+    return 1
+  elif [ "$status" -ne 0 ]; then
+    err "$target: failed to build new content; skipped"
+    return 1
+  fi
+
+  if cmp -s "$TMP/new" "$target"; then
+    say "ok       $target"
+    return 0
+  fi
+  [ ! -L "$target" ] || warn "$target is a symlink; editing the file it points to"
+  # Write in place: keeps permissions, ownership and symlinks.
+  cat "$TMP/new" >"$target"
+  say "updated  $target"
+}
+
+# write_selector NAME
+write_selector() {
+  case $1 in
+    '' | . | .. | */* | -*) die "invalid profile name: '$1'" ;;
+  esac
+  [ -d "$DOTFILES_DIR/hosts/$1" ] ||
+    warn "no directory hosts/$1 in the repo; host files will be skipped"
+  mkdir -p "${SELECTOR%/*}"
+  printf '%s\n' "$1" >"$SELECTOR"
+  say "profile  $1 (written to $SELECTOR)"
+}
+
+read_profile() {
+  profile=
+  [ -r "$SELECTOR" ] && read -r profile <"$SELECTOR" || :
+  printf '%s' "$profile"
+}
+
+# list_tools FILE...: print "name bin [bin...]" per tool table in packages.toml.
+# A tool's commands come from its `bin` key, defaulting to its name.
+list_tools() {
+  awk '
+    /^[[:space:]]*\[/ {
+      if (name != "") print name, bins
+      name = $0; gsub(/[][[:space:]]/, "", name); bins = name; next
+    }
+    /^[[:space:]]*bin[[:space:]]*=/ {
+      v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]*#.*/, "", v)
+      gsub(/"/, "", v); bins = v
+    }
+    END { if (name != "") print name, bins }' "$@"
+}
+
+report_missing_tools() {
+  set -- "$DOTFILES_DIR/packages.toml"
+  profile=$(read_profile)
+  if [ -n "$profile" ] && [ -f "$DOTFILES_DIR/hosts/$profile/packages.toml" ]; then
+    set -- "$@" "$DOTFILES_DIR/hosts/$profile/packages.toml"
+  fi
+  missing=$(list_tools "$@" | while read -r tool bins; do
+    found=
+    for b in $bins; do
+      if command -v "$b" >/dev/null 2>&1; then found=1; break; fi
+    done
+    [ -n "$found" ] || printf '%s ' "$tool"
+  done)
+  if [ -n "$missing" ]; then
+    say "missing  ${missing% } (see \`dotfiles install\`)"
+  fi
+}
+
+cmd_init() {
+  profile_arg=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --profile) [ $# -ge 2 ] || die "--profile needs a name"; profile_arg=$2; shift 2 ;;
+      --profile=*) profile_arg=${1#--profile=}; shift ;;
+      -h | --help) say "usage: dotfiles init [--profile NAME]"; return 0 ;;
+      *) die "init: unknown option: $1" ;;
+    esac
+  done
+
+  dir=$(block_dir)
+  TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
+
+  if [ -n "$profile_arg" ]; then
+    write_selector "$profile_arg"
+  elif [ -z "$(read_profile)" ]; then
+    say "profile  none (pass --profile NAME to select one)"
+  else
+    say "profile  $(read_profile)"
+  fi
+
+  failed=0
+  for pair in $ENTRY_FILES; do
+    inject_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$HOME/${pair#*:}" "$dir" ||
+      failed=$((failed + 1))
+  done
+  # A new ~/.bash_profile hides ~/.bash_login from bash login shells.
+  [ ! -e "$HOME/.bash_login" ] ||
+    warn "$HOME/.bash_login is no longer read by bash; move its content below the block in ~/.bash_profile"
+
+  mkdir -p "$CACHE_DIR"
+
+  if [ "$DOTFILES_OS" = linux ]; then
+    say "sync-env not implemented yet; skipped"
+  fi
+
+  report_missing_tools
+
+  if [ "$failed" -gt 0 ]; then
+    err "$failed entry file(s) skipped"
+    return 1
+  fi
+}
+
+# --- other commands ---------------------------------------------------------
+
 cmd_install()   { not_implemented install; }
 cmd_doctor()    { not_implemented doctor; }
 cmd_sync_env()  { not_implemented sync-env; }
 cmd_uninstall() { not_implemented uninstall; }
-cmd_test()      { exec sh "$DOTFILES_DIR/test/matrix.sh" "$@"; }
+cmd_test() {
+  sh "$DOTFILES_DIR/test/init.sh" && exec sh "$DOTFILES_DIR/test/matrix.sh" "$@"
+}
 
 [ $# -gt 0 ] || { usage >&2; exit 2; }
 cmd=$1
@@ -42,5 +265,5 @@ case $cmd in
   test) cmd_test "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
   -h | --help | help) usage ;;
-  *) printf 'dotfiles: unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;
+  *) err "unknown command: $cmd"; usage >&2; exit 2 ;;
 esac

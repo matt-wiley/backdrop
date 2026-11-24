@@ -9,12 +9,9 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT INT TERM
 fails=0
 
-# Inject blocks directly until `dotfiles init` exists.
 inject() {
-  for pair in profile:.profile bash_profile:.bash_profile bashrc:.bashrc \
-              zshenv:.zshenv zprofile:.zprofile zshrc:.zshrc; do
-    sed "s|@DOTFILES_DIR@|$repo|" "$repo/blocks/${pair%%:*}.sh" >"$scratch/${pair#*:}"
-  done
+  HOME=$scratch DOTFILES_SKEL_DIR=$scratch/no-skel "$repo/bin/dotfiles" init >/dev/null ||
+    { echo "FAIL  dotfiles init"; exit 1; }
 }
 
 # run SHELL FLAGS: print the layers loaded, space-separated, in order.
