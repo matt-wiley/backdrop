@@ -165,37 +165,48 @@ read_profile() {
   printf '%s' "$profile"
 }
 
-# list_tools FILE...: print "name bin [bin...]" per tool table in packages.toml.
-# A tool's commands come from its `bin` key, defaulting to its name.
+# list_tools FILE...: print "name required bin [bin...]" per tool table in
+# packages.toml. required is 1 or 0; commands come from the `bin` key,
+# defaulting to the tool's name.
 list_tools() {
   awk '
+    function flush() { if (name != "") print name, req, bins }
     /^[[:space:]]*\[/ {
-      if (name != "") print name, bins
-      name = $0; gsub(/[][[:space:]]/, "", name); bins = name; next
+      flush()
+      name = $0; gsub(/[][[:space:]]/, "", name); bins = name; req = 0; next
     }
-    /^[[:space:]]*bin[[:space:]]*=/ {
+    /^[[:space:]]*(bin|required)[[:space:]]*=/ {
+      k = $0; sub(/^[[:space:]]*/, "", k); sub(/[[:space:]]*=.*/, "", k)
       v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]*#.*/, "", v)
-      gsub(/"/, "", v); bins = v
+      gsub(/"/, "", v)
+      if (k == "bin") bins = v; else req = (v == "true")
     }
-    END { if (name != "") print name, bins }' "$@"
+    END { flush() }' "$@"
 }
 
-report_missing_tools() {
+# missing_tools all|required: print the names of tools that aren't on PATH,
+# space-separated, from the shared and the profile's packages.toml.
+missing_tools() {
+  mode=$1
   set -- "$DOTFILES_DIR/packages.toml"
   profile=$(read_profile)
   if [ -n "$profile" ] && [ -f "$DOTFILES_DIR/hosts/$profile/packages.toml" ]; then
     set -- "$@" "$DOTFILES_DIR/hosts/$profile/packages.toml"
   fi
-  missing=$(list_tools "$@" | while read -r tool bins; do
+  missing=$(list_tools "$@" | while read -r tool req bins; do
+    [ "$mode" = all ] || [ "$req" = 1 ] || continue
     found=
     for b in $bins; do
       if command -v "$b" >/dev/null 2>&1; then found=1; break; fi
     done
     [ -n "$found" ] || printf '%s ' "$tool"
   done)
-  if [ -n "$missing" ]; then
-    say "missing  ${missing% } (see \`dotfiles install\`)"
-  fi
+  printf '%s' "${missing% }"
+}
+
+report_missing_tools() {
+  missing=$(missing_tools all)
+  [ -z "$missing" ] || say "missing  $missing (see \`dotfiles install\`)"
 }
 
 cmd_init() {
@@ -327,13 +338,277 @@ cmd_uninstall() {
   fi
 }
 
+# --- doctor -----------------------------------------------------------------
+
+# Names that interactive config must not shadow, on top of each shell's builtins.
+COMMON_COMMANDS='awk cat cd chmod cp curl cut diff du echo env find git grep head
+kill less ln ls make man mkdir mv ps pwd rm rmdir sed sort ssh tail tar test
+touch tr wc which xargs'
+
+ERRORS=0
+WARNINGS=0
+
+# report LEVEL MESSAGE: print one finding, indented under the current heading.
+report() {
+  case $1 in
+    error) ERRORS=$((ERRORS + 1)) ;;
+    warn) WARNINGS=$((WARNINGS + 1)) ;;
+  esac
+  printf '  %-6s %s\n' "$1" "$2"
+}
+
+# show PATH: PATH with $HOME replaced by ~.
+show() {
+  case $1 in
+    "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# inspect FILE: print key=value facts about FILE's dotfiles blocks.
+inspect() {
+  awk '
+    NR == 1 && /^#!/ { next }
+    !started && /[^[:space:]]/ { started = 1; first = /^# >>> dotfiles / }
+    /^# >>> dotfiles / {
+      if (inblock) broken = 1
+      inblock = 1; blocks++
+      if (blocks == 1) version = $4
+      next
+    }
+    inblock && $0 == "# <<< dotfiles <<<" { inblock = 0; next }
+    inblock && blocks == 1 && /^DOTFILES_DIR="/ {
+      dir = $0; sub(/^DOTFILES_DIR="/, "", dir); sub(/".*/, "", dir)
+    }
+    END {
+      if (inblock) broken = 1
+      printf "blocks=%d\nbroken=%d\nfirst=%d\nversion=%s\ndir=%s\n",
+        blocks, broken, first, version, dir
+    }' "$1"
+}
+
+# first_block FILE: print the first block, markers included.
+first_block() {
+  awk '/^# >>> dotfiles / { on = 1 } on { print } on && $0 == "# <<< dotfiles <<<" { exit }' "$1"
+}
+
+# sourced_files BLOCKFILE: repo-relative files a block always sources.
+# Host files are optional and skipped.
+sourced_files() {
+  sed -n 's/.*"\$DOTFILES_DIR\/\([^"$]*\)".*/\1/p' "$1" | sort -u
+}
+
+# version_num vN: print N, or 0 if it isn't a version.
+version_num() {
+  n=${1#v}
+  case $n in '' | *[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
+# contains NEEDLE HAYSTACK: true if NEEDLE's text appears in HAYSTACK.
+contains() {
+  awk 'FNR == NR { a = a $0 "\n"; next } { b = b $0 "\n" }
+       END { exit !(a != "" && index(b, a)) }' "$1" "$2"
+}
+
+# doctor_file TEMPLATE TARGET: check one entry file and save its local content
+# to $TMP/local/NAME.
+doctor_file() {
+  tmpl=$1 target=$2 name=${2##*/}
+  before=$((ERRORS + WARNINGS))
+  say "$(show "$target")"
+
+  if [ ! -e "$target" ]; then
+    report error "missing (run \`dotfiles init\`)"; return 0
+  fi
+  if [ ! -f "$target" ]; then
+    report error "not a regular file"; return 0
+  fi
+
+  inspect "$target" >"$TMP/facts"
+  fact() { sed -n "s/^$1=//p" "$TMP/facts"; }
+  blocks=$(fact blocks) broken=$(fact broken) first=$(fact first)
+  version=$(fact version) dir=$(fact dir)
+
+  if [ "$blocks" -eq 0 ]; then
+    report error "no dotfiles block (run \`dotfiles init\`)"; return 0
+  fi
+  if [ "$broken" -eq 1 ]; then
+    report error "unterminated or nested block; fix it by hand"; return 0
+  fi
+  [ "$blocks" -eq 1 ] || report error "$blocks blocks; \`dotfiles init\` merges them into one"
+  [ "$first" -eq 1 ] || report error "block is not at the top; something was added above it (\`dotfiles init\` moves it back)"
+
+  first_block "$target" >"$TMP/block"
+  case $dir in
+    '$HOME') rdir=$HOME ;;
+    '$HOME'/*) rdir=$HOME/${dir#'$HOME/'} ;;
+    *) rdir=$dir ;;
+  esac
+  same_dir=0
+  if [ -z "$dir" ]; then
+    report error "block has no DOTFILES_DIR line"
+  elif [ ! -d "$rdir" ]; then
+    report error "DOTFILES_DIR does not exist: $dir"
+  else
+    if [ "$(cd "$rdir" && pwd -P)" = "$DOTFILES_DIR" ]; then
+      same_dir=1
+    else
+      report warn "DOTFILES_DIR is $rdir, but this repo is $DOTFILES_DIR (run \`dotfiles init\` from the repo you use)"
+    fi
+    for f in $(sourced_files "$TMP/block"); do
+      [ -r "$rdir/$f" ] || report error "sourced file is missing: \$DOTFILES_DIR/$f"
+      if [ "$f" = sh/env.sh ] && [ ! -r "$rdir/sh/lib.sh" ]; then
+        report error "sourced file is missing: \$DOTFILES_DIR/sh/lib.sh"
+      fi
+    done
+  fi
+
+  want=$(sed -n '1s/^# >>> dotfiles \(v[0-9]*\) .*/\1/p' "$tmpl")
+  have_n=$(version_num "$version") want_n=$(version_num "$want")
+  if [ "$have_n" -lt "$want_n" ]; then
+    report warn "block is $version, repo has $want (run \`dotfiles init\` to upgrade)"
+  elif [ "$have_n" -gt "$want_n" ]; then
+    report warn "block is $version, newer than the repo's $want (is the repo out of date?)"
+  elif [ "$same_dir" -eq 1 ]; then
+    render_block "$tmpl" "$(block_dir)" >"$TMP/want"
+    cmp -s "$TMP/block" "$TMP/want" ||
+      report warn "block was edited inside the markers (\`dotfiles init\` restores it)"
+  fi
+
+  strip "$target" | awk 'NR == 1 && /^#!/ { next } { print }' >"$TMP/local/$name"
+  if [ "$DOTFILES_OS" = linux ] && [ -f "$SKEL_DIR/$name" ] &&
+    contains "$SKEL_DIR/$name" "$TMP/local/$name"; then
+    report warn "distro skeleton $(show "$SKEL_DIR/$name") was added below the block"
+  fi
+
+  [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "block $version at the top"
+}
+
+# shadow_names SHELL: print "kind name" for each alias or function the shell's
+# interactive startup defines over a builtin or a common command.
+shadow_names() {
+  case $1 in
+    bash) probe='compgen -b | sed "s/^/B /"; compgen -a | sed "s/^/A /"
+                 declare -F | sed "s/^declare -f[^ ]* /F /"' ;;
+    zsh) probe='print -rl -- ${(k)builtins/#/B } ${(k)aliases/#/A } ${(k)functions/#/F }' ;;
+  esac
+  # Prefix probe lines so stray output from rc files can't be mistaken for names.
+  "$1" -ic "{ $probe; } | sed 's/^/@df@ /'" </dev/null 2>/dev/null |
+    sed -n 's/^@df@ //p' |
+    awk -v common="$COMMON_COMMANDS" '
+      BEGIN { n = split(common, c, /[[:space:]]+/); for (i = 1; i <= n; i++) bad[c[i]] = 1 }
+      $1 == "B" { bad[$2] = 1; next }
+      { seen[NR] = $0 }
+      END {
+        for (i = 1; i <= NR; i++) {
+          if (!(i in seen)) continue
+          split(seen[i], f, " ")
+          if (f[2] in bad) print (f[1] == "A" ? "alias" : "function"), f[2]
+        }
+      }'
+}
+
+doctor_general() {
+  say "general"
+  before=$((ERRORS + WARNINGS))
+
+  profile=$(read_profile)
+  if [ -z "$profile" ]; then
+    report warn "no profile selected in $(show "$SELECTOR") (\`dotfiles init --profile NAME\`)"
+  elif [ ! -d "$DOTFILES_DIR/hosts/$profile" ]; then
+    report warn "profile '$profile' has no directory hosts/$profile"
+  fi
+
+  if [ "$DOTFILES_OS" = linux ]; then
+    conf=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/dotfiles.conf
+    if [ ! -e "$conf" ]; then
+      report info "$(show "$conf") not generated yet (\`dotfiles sync-env\`)"
+    else
+      for f in sh/env.sh sh/os/linux.sh "hosts/$profile/env.sh"; do
+        if [ -f "$DOTFILES_DIR/$f" ] && [ "$DOTFILES_DIR/$f" -nt "$conf" ]; then
+          report warn "$(show "$conf") is older than $f (\`dotfiles sync-env\`)"
+          break
+        fi
+      done
+    fi
+  fi
+
+  for sh in bash zsh; do
+    command -v "$sh" >/dev/null 2>&1 || continue
+    shadow_names "$sh" >"$TMP/shadow"
+    while read -r kind word; do
+      report warn "$sh: $kind '$word' shadows a builtin or common command"
+    done <"$TMP/shadow"
+  done
+
+  for tool in $(missing_tools required); do
+    report info "required tool '$tool' is not installed (\`dotfiles install\`)"
+  done
+
+  [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "profile, environment and aliases"
+}
+
+# doctor_local DIFF: print each entry file's content below the block, or with
+# DIFF=1 its changes since the last run. Then save a new snapshot.
+doctor_local() {
+  snapdir=$CACHE_DIR/doctor
+  say "local content below each block"
+  for pair in $ENTRY_FILES; do
+    name=${pair#*:}
+    cur=$TMP/local/$name
+    [ -f "$cur" ] || continue
+    old=$snapdir/$name
+    if [ "$1" -eq 1 ] && [ -f "$old" ]; then
+      if cmp -s "$old" "$cur"; then
+        say "  ~/$name: unchanged since last run"
+      else
+        say "  ~/$name: changed since last run"
+        diff -u -L "last run" -L "now" "$old" "$cur" | sed 's/^/    /' || :
+      fi
+    elif [ -s "$cur" ]; then
+      say "  ~/$name:"
+      sed 's/^/    | /' "$cur"
+    else
+      say "  ~/$name: (empty)"
+    fi
+  done
+  mkdir -p "$snapdir"
+  for f in "$TMP/local"/.[!.]*; do
+    if [ -f "$f" ]; then cp "$f" "$snapdir/"; fi
+  done
+}
+
+cmd_doctor() {
+  diff_mode=0
+  case ${1-} in
+    '') ;;
+    --diff) diff_mode=1 ;;
+    -h | --help) say "usage: dotfiles doctor [--diff]"; return 0 ;;
+    *) die "doctor: unknown option: $1" ;;
+  esac
+  TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
+  mkdir "$TMP/local"
+
+  for pair in $ENTRY_FILES; do
+    doctor_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$HOME/${pair#*:}"
+  done
+  doctor_general
+  doctor_local "$diff_mode"
+
+  e=errors w=warnings
+  [ "$ERRORS" -ne 1 ] || e=error
+  [ "$WARNINGS" -ne 1 ] || w=warning
+  say "doctor: $ERRORS $e, $WARNINGS $w"
+  [ "$ERRORS" -eq 0 ]
+}
+
 # --- other commands ---------------------------------------------------------
 
 cmd_install()   { not_implemented install; }
-cmd_doctor()    { not_implemented doctor; }
 cmd_sync_env()  { not_implemented sync-env; }
 cmd_test() {
-  for t in init uninstall; do
+  for t in init uninstall doctor; do
     sh "$DOTFILES_DIR/test/$t.sh" || return 1
   done
   exec sh "$DOTFILES_DIR/test/matrix.sh" "$@"

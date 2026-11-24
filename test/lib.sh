@@ -30,6 +30,9 @@ run_cli() {
 }
 run_init() { run_cli init "$@"; }
 run_uninstall() { run_cli uninstall "$@"; }
+run_doctor() { run_cli doctor "$@"; }
+# out_has PATTERN: true if the last command's output has a line matching PATTERN.
+out_has() { grep -qE -- "$1" "$root/out"; }
 
 first_line() { head -n 1 "$1"; }
 count_blocks() { grep -c '^# >>> dotfiles ' "$1"; }
