@@ -1,5 +1,9 @@
 name: test
-on: [push, pull_request]
+on:
+  push:
+    branches: ['**'] # tags run these tests through the release workflow
+  pull_request:
+  workflow_call: # the release workflow runs these tests before publishing
 jobs:
   matrix:
     strategy:

@@ -47,6 +47,7 @@ commands:
   sync-env                Linux: write ~/.config/environment.d/dotfiles.conf
   test [--profile]        run the load matrix locally
   uninstall               remove every block and environment.d/dotfiles.conf
+  version                 print the installed version
 USAGE
 }
 
@@ -893,8 +894,19 @@ cmd_install() {
 
 # --- other commands ---------------------------------------------------------
 
+# cmd_version: the release in VERSION, plus the git commit for a clone.
+cmd_version() {
+  version=$(cat "$DOTFILES_DIR/VERSION" 2>/dev/null || echo unknown)
+  if [ -e "$DOTFILES_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+    commit=$(git -C "$DOTFILES_DIR" describe --tags --always --dirty 2>/dev/null || :)
+    say "dotfiles $version${commit:+ (git $commit)}"
+  else
+    say "dotfiles $version"
+  fi
+}
+
 cmd_test() {
-  for t in init uninstall doctor sync-env install faults; do
+  for t in init uninstall doctor sync-env install faults release; do
     sh "$DOTFILES_DIR/test/$t.sh" || return 1
   done
   # Load this machine's profile in the matrix, so its host files are tested too.
@@ -916,6 +928,7 @@ case $cmd in
   sync-env) cmd_sync_env "$@" ;;
   test) cmd_test "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
+  version | --version | -V) cmd_version ;;
   -h | --help | help) usage ;;
   *) err "unknown command: $cmd"; usage >&2; exit 2 ;;
 esac

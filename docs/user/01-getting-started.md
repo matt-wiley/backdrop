@@ -11,12 +11,28 @@ Every shell reaches the environment layer; only interactive shells reach the int
 ## What you need
 
 - Linux or macOS.
-- `git`, and bash or zsh as your shell. Everything else the CLI needs ships with the OS.
+- bash or zsh as your shell, and either curl or wget (for a release) or `git` (for a clone). Everything else the CLI needs ships with the OS.
 - For `dotfiles install`: Homebrew on macOS, or apt, dnf, pacman or Homebrew on Linux.
 
 ## Set up a machine
 
-### 1. Clone the repo
+There are two ways to get the files:
+
+- **A release,** with one command and no git. Upgrades replace the files, so edits you make to shared files need copying back by hand after each upgrade. Profiles you create carry over.
+- **A git clone,** if you'll change the config and want those changes versioned. The rest of this guide assumes a clone, but every step after the install works the same either way.
+
+### 1. Get the files
+
+To install a release, run the installer with curl or wget. It also does steps 2 and 4 below for you:
+
+```sh
+curl -fsSL https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | sh
+wget -qO- https://github.com/matt-wiley/mobua-bohr/releases/latest/download/install.sh | sh
+```
+
+The [README](../../README.md#install) lists its options, how to install a specific version and how to upgrade.
+
+To clone instead:
 
 ```sh
 git clone https://github.com/matt-wiley/mobua-bohr.git ~/.dotfiles
