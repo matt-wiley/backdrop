@@ -199,6 +199,49 @@ check "installs mise first" logged 'sudo apt-get install -y df-alpha df-beta-too
 check "then the runtime" logged 'mise use -g df-runtime@1'
 rm -f "$FAKEBIN/mise"
 
+# Tools with no command, such as zsh plugins, list files in a `file` array
+# instead. Any one of the files existing counts as installed, and the table's
+# name isn't checked as a command, so df-plugin on PATH doesn't count. The
+# paths include a space, which arrays allow. `bin` can be an array too, here
+# spread over lines with a comment, and the table after it must still be
+# read.
+setup
+mkdir -p "$root/plugin dir"
+rm -f "$root/plugin dir/"*
+cat >>"$H/.dotfiles/packages.toml" <<X
+
+[df-plugin]
+file = [
+  "$root/plugin dir/missing.zsh",
+  "$root/plugin dir/df-plugin.zsh",  # the one this case creates
+]
+apt = "df-plugin"
+
+[df-arr]
+bin = [
+  "df-arr-a",
+  "df-arr-b",
+]
+apt = "df-arr"
+
+[df-inline]
+bin = ["df-inline-a", "df-inline-b"]  # a comment
+apt = "df-inline"
+X
+cp "$FAKEBIN/fake" "$FAKEBIN/df-plugin"
+cp "$FAKEBIN/fake" "$FAKEBIN/df-arr-b"
+cp "$FAKEBIN/fake" "$FAKEBIN/df-inline-b"
+run_cli install --manager apt
+check "plans a plugin whose files are missing" out_has '^install  df-plugin via apt \(df-plugin\)$'
+check "reads a multi-line bin array" out_has '^ok       df-arr$'
+check "reads a one-line bin array" out_has '^ok       df-inline$'
+: >"$root/plugin dir/df-plugin.zsh"
+run_cli install --manager apt
+check "counts a plugin whose file exists" out_has '^ok       df-plugin$'
+rm -f "$root/plugin dir/df-plugin.zsh"
+run_cli install --manager apt --yes
+check "warns when a plugin's files don't appear" out_has "df-plugin is still missing; none of .* exists"
+
 # Unknown managers and options are rejected rather than ignored.
 setup
 check "rejects an unknown manager" fails run_cli install --manager nope

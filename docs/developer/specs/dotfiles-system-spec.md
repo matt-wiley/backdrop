@@ -227,13 +227,15 @@ A single POSIX `sh` script, `bin/dotfiles`, with seven commands, each accepting 
 `dotfiles install` installs tools; it is the only command that touches package managers or uses `sudo`.
 
 - **Package list:** a declarative `packages.toml`, one table per logical tool, mapping each manager to its package name (for example `fd` is `fd-find` on apt, `fd` on brew and pacman). Optional keys:
-  - `bin`: the commands that count as installed, any one of them; defaults to the tool's name (for example `bin = "fd fdfind"`).
+  - `bin`: the commands that count as installed, any one of them; defaults to the tool's name unless `file` is set (for example `bin = ["fd", "fdfind"]`).
+  - `file`: files that count as installed, any one of them; for tools with no command, such as zsh plugins (for example `file = ["/opt/homebrew/share/x/x.zsh", "/usr/share/x/x.zsh"]`).
+  - Values are a quoted string, `true`/`false`, or an array of quoted strings, which may span lines.
   - `required = true`: `doctor` reports the tool when it is missing.
   - `mise = "SPEC"`: install with `mise use -g SPEC` instead of the package manager; for runtimes, such as `mise = "node@lts"`.
 - **Profiles:** a shared list plus `hosts/<profile>/packages.toml`. A table there adds a tool, or replaces the shared table of the same name.
 - **Managers:** Homebrew on macOS (if it is missing, `install` points to brew.sh); apt, dnf or pacman on Linux, then Homebrew. `--manager NAME` overrides detection. System managers run through `sudo` when not root; brew never does.
 - **Commands:** all missing packages go in one install command (apt runs `apt-get update` first), then `mise use -g` for each mise tool, after mise itself if it is being installed. Mise tools are skipped with a warning when mise is unavailable.
-- **Safety:** dry run by default, printing the plan and the exact commands; `--yes` applies. After applying, `install` warns when a tool's commands still aren't on `PATH`, and exits non-zero if a manager command fails.
+- **Safety:** dry run by default, printing the plan and the exact commands; `--yes` applies. After applying, `install` warns when none of a tool's commands is on `PATH` and none of its files exists, and exits non-zero if a manager command fails.
 - **First run:** `dotfiles init && dotfiles install --yes`.
 
 ### Doctor checks

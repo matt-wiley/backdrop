@@ -161,15 +161,23 @@ Add a table to `packages.toml`, or to `hosts/<profile>/packages.toml` for one pr
 
 ```toml
 [fd]
-bin = "fd fdfind"   # commands that count as installed; default: the table name
-required = true     # doctor reports it when missing
-brew = "fd"         # package name for each manager
+bin = ["fd", "fdfind"]  # commands that count as installed; default: the table name
+required = true         # doctor reports it when missing
+brew = "fd"             # package name for each manager
 apt = "fd-find"
 dnf = "fd-find"
 pacman = "fd"
 
 [node]
-mise = "node@lts"   # installed with `mise use -g`, not the package manager
+mise = "node@lts"       # installed with `mise use -g`, not the package manager
+
+[zsh-autosuggestions]
+file = [                # for tools with no command: files that count as installed
+  "/opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh",
+  "/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh",
+]
+brew = "zsh-autosuggestions"
+apt = "zsh-autosuggestions"
 ```
 
 Leave out a manager to skip the tool there. A table in a profile's `packages.toml` replaces the shared table of the same name.

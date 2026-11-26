@@ -108,8 +108,8 @@ unset _df_zcompdump _df_fresh
 # in different directories; the first that exists is loaded. A profile's
 # rc.zsh can add its own with _df_load_last+=(/path/to/plugin.zsh).
 _df_load_last=(
-  # /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh:/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
-  # /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh:/usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+  /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh:/usr/local/share/zsh-autosuggestions/zsh-autosuggestions.zsh:/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+  /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh:/usr/local/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh:/usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 )
 
 # Runs just before the first prompt: loads the listed plugins, then removes
