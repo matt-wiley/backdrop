@@ -68,7 +68,7 @@ You can skip the profile: run `init` without `--profile`, and the machine gets t
 `init` does the following:
 
 - Writes the profile name to `~/.config/dotfiles/host`. That file is per machine and isn't part of the repo.
-- Adds the block to the top of `~/.profile`, `~/.bash_profile`, `~/.bashrc`, `~/.zshenv`, `~/.zprofile` and `~/.zshrc`, creating any that don't exist. Your existing content moves below the block, unchanged.
+- Adds the block to the top of `~/.profile`, `~/.bash_profile`, `~/.bashrc`, `~/.zshenv`, `~/.zprofile` and `~/.zshrc`, creating any that don't exist. Your existing content moves below the block, unchanged. If your `~/.zshenv` sets `ZDOTDIR`, the `.zprofile` and `.zshrc` blocks go in that directory instead, because that's where zsh reads them.
 - On Linux, backs up any of those files that is still an untouched copy of the distro default (from `/etc/skel`) to `<file>.dist`, and replaces it with a bare block. The repo's config takes over what the default provided.
 - On Linux, writes `~/.config/environment.d/dotfiles.conf` so desktop apps get the same environment (see [Desktop apps on Linux](#desktop-apps-on-linux)).
 - Lists tools from `packages.toml` that aren't installed.

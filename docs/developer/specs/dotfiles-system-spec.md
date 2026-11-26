@@ -143,6 +143,7 @@ DOTFILES_DIR="$HOME/.dotfiles"   # repo path, written by init
 6. `uninstall` removes the text between and including the markers, plus the blank line `init` adds after the block, so `init` followed by `uninstall` restores a file byte for byte. A file left with nothing but the block is deleted, or restored from its `.dist` backup if one exists; an empty `~/.bash_profile` would otherwise hide `~/.profile` from bash login shells. If content was added below the block, the `.dist` backup is kept for a manual merge.
 7. Entry files that are symlinks are edited through the link; the link stays.
 8. `init` warns if `~/.bash_login` exists, since the `~/.bash_profile` it creates stops bash from reading it.
+9. zsh reads its files from `$ZDOTDIR` when it is set, usually by `~/.zshenv` itself, so the zsh entry files go where zsh reads them: `.zshenv` where `zsh -f` finds it, `.zprofile` and `.zshrc` where `zsh -c` does, after `.zshenv` has run. `init`, `doctor` and `uninstall` ask zsh with `ZDOTDIR` unset, because the value in the current shell may come from an editor's terminal integration rather than from startup. `init` creates the directory if needed and warns when the current shell's `ZDOTDIR` differs. A block left in `~/.zshrc` or `~/.zprofile` from before `ZDOTDIR` was set gets a warning from `init` and `doctor`, and `uninstall` removes it.
 
 ## Load-last handling
 

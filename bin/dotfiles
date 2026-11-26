@@ -63,6 +63,62 @@ SKEL_DIR=${DOTFILES_SKEL_DIR:-/etc/skel} # overridable for tests
 # ${pair#*:} (the part after it).
 ENTRY_FILES='profile:.profile bash_profile:.bash_profile bashrc:.bashrc zshenv:.zshenv zprofile:.zprofile zshrc:.zshrc'
 
+# zsh_dirs
+#
+# Sets ZSH_ENV_DIR, the directory zsh reads .zshenv from, and ZSH_RC_DIR, the
+# one it reads .zprofile and .zshrc from. zsh reads its startup files from
+# $ZDOTDIR when that's set, and from $HOME otherwise. ZDOTDIR is usually set
+# in ~/.zshenv itself, for example to ~/.config/zsh, and zsh then reads the
+# rest of its files from there, so the two directories can differ.
+#
+# Rather than parse anyone's startup files, this asks zsh. `zsh -f` reads only
+# /etc/zshenv, which can set ZDOTDIR too, so it shows where .zshenv is read.
+# Plain `zsh -c` also reads that .zshenv, so it shows where the other files
+# are read.
+#
+# ZDOTDIR is unset for both, because the value in this shell isn't
+# necessarily what a new terminal or login would get: editors' terminal
+# integrations, such as VS Code's, set it while they start the shell. The
+# probe prints its answer behind an @df@ prefix, as shadow_names does, so
+# anything the startup files print is ignored. Without zsh, both are $HOME.
+zsh_dirs() {
+  ZSH_ENV_DIR=$HOME ZSH_RC_DIR=$HOME
+  command -v zsh >/dev/null 2>&1 || return 0
+  zprobe='print -r -- "@df@ ${ZDOTDIR:-$HOME}"'
+  d=$( (unset ZDOTDIR; zsh -f -c "$zprobe") </dev/null 2>/dev/null | sed -n 's/^@df@ //p' | tail -n 1)
+  [ -z "$d" ] || ZSH_ENV_DIR=$d
+  d=$( (unset ZDOTDIR; zsh -c "$zprobe") </dev/null 2>/dev/null | sed -n 's/^@df@ //p' | tail -n 1)
+  [ -z "$d" ] || ZSH_RC_DIR=$d
+}
+
+# entry_path TEMPLATE:TARGET
+#
+# Prints the full path of one entry file from ENTRY_FILES. The zsh files are
+# in the directories zsh_dirs found, and the rest are in $HOME. zsh_dirs must
+# have run first.
+entry_path() {
+  case ${1#*:} in
+    .zshenv) printf '%s/.zshenv' "$ZSH_ENV_DIR" ;;
+    .zprofile | .zshrc) printf '%s/%s' "$ZSH_RC_DIR" "${1#*:}" ;;
+    *) printf '%s/%s' "$HOME" "${1#*:}" ;;
+  esac
+}
+
+# stale_zsh_blocks
+#
+# Prints each zsh entry file in $HOME that has a dotfiles block but isn't
+# read, because ZDOTDIR sends zsh elsewhere. That happens when ZDOTDIR is set
+# after init has already written ~/.zshrc. zsh_dirs must have run first.
+stale_zsh_blocks() {
+  for f in .zshenv .zprofile .zshrc; do
+    case $f in .zshenv) d=$ZSH_ENV_DIR ;; *) d=$ZSH_RC_DIR ;; esac
+    [ "$d" != "$HOME" ] || continue
+    if [ -f "$HOME/$f" ] && grep -q '^# >>> dotfiles ' "$HOME/$f"; then
+      printf '%s\n' "$HOME/$f"
+    fi
+  done
+}
+
 # Commands that need scratch files create a temporary directory in TMP, and
 # the EXIT trap removes it however the script ends. Some shells, such as dash,
 # don't run the EXIT trap when killed by a signal, so the second trap turns
@@ -473,10 +529,23 @@ cmd_init() {
     say "profile  $(read_profile)"
   fi
 
+  # zsh may read its files from ZDOTDIR rather than $HOME (see zsh_dirs).
+  # If the ZDOTDIR in this shell points somewhere else again, say which one
+  # init used, because the files won't be where this shell looks.
+  zsh_dirs
+  if [ -n "${ZDOTDIR-}" ] && [ "$ZDOTDIR" != "$ZSH_ENV_DIR" ] && [ "$ZDOTDIR" != "$ZSH_RC_DIR" ]; then
+    warn "ZDOTDIR is $ZDOTDIR in this shell, but a new zsh reads its files from $ZSH_RC_DIR; using that"
+  fi
+
   failed=0
   for pair in $ENTRY_FILES; do
-    inject_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$HOME/${pair#*:}" "$dir" ||
+    target=$(entry_path "$pair")
+    [ -d "${target%/*}" ] || mkdir -p "${target%/*}"
+    inject_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$target" "$dir" ||
       failed=$((failed + 1))
+  done
+  for f in $(stale_zsh_blocks); do
+    warn "$f has a dotfiles block, but zsh reads ${f##*/} from $ZSH_RC_DIR; remove the block from $f by hand"
   done
   # A bash login shell reads only the first of ~/.bash_profile, ~/.bash_login
   # and ~/.profile that exists. Once init has created ~/.bash_profile, bash
@@ -769,9 +838,15 @@ cmd_uninstall() {
   esac
   TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
 
+  # Blocks are removed where zsh reads its files now, and also from the zsh
+  # files in $HOME that an earlier init wrote before ZDOTDIR was set.
+  zsh_dirs
   failed=0
   for pair in $ENTRY_FILES; do
-    uninstall_file "$HOME/${pair#*:}" || failed=$((failed + 1))
+    uninstall_file "$(entry_path "$pair")" || failed=$((failed + 1))
+  done
+  for f in $(stale_zsh_blocks); do
+    uninstall_file "$f" || failed=$((failed + 1))
   done
 
   envd=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/dotfiles.conf
@@ -1008,6 +1083,8 @@ doctor_file() {
 #   aliases, and declare -F lists functions. In zsh, ${(k)builtins} is the
 #   list of keys of the builtins table, and /#/B adds "B " to the start of
 #   each one.
+# - ZDOTDIR is unset so zsh starts the way a new terminal would, for the
+#   reason given at zsh_dirs.
 # - stdin comes from /dev/null so the interactive shell can't wait for, or
 #   read, your keyboard input, and its stderr is discarded so startup noise
 #   doesn't end up in doctor's output.
@@ -1022,7 +1099,7 @@ shadow_names() {
   # The probe's lines get an @df@ prefix and only lines with it are kept, so
   # anything else the rc files print, such as a greeting, can't be mistaken
   # for a name.
-  "$1" -ic "{ $probe; } | sed 's/^/@df@ /'" </dev/null 2>/dev/null |
+  (unset ZDOTDIR; "$1" -ic "{ $probe; } | sed 's/^/@df@ /'") </dev/null 2>/dev/null |
     sed -n 's/^@df@ //p' |
     awk -v common="$(printf '%s' "$COMMON_COMMANDS" | tr '\n' ' ')" '
       BEGIN { n = split(common, c, /[[:space:]]+/); for (i = 1; i <= n; i++) bad[c[i]] = 1 }
@@ -1083,6 +1160,10 @@ doctor_general() {
     done <"$TMP/shadow"
   done
 
+  for f in $(stale_zsh_blocks); do
+    report warn "$(show "$f") has a dotfiles block, but zsh reads ${f##*/} from $(show "$ZSH_RC_DIR"); remove the block by hand"
+  done
+
   for tool in $(missing_tools required); do
     report info "required tool '$tool' is not installed (\`dotfiles install\`)"
   done
@@ -1101,25 +1182,25 @@ doctor_local() {
   snapdir=$CACHE_DIR/doctor
   say "local content below each block"
   for pair in $ENTRY_FILES; do
-    name=${pair#*:}
+    name=${pair#*:} shown=$(show "$(entry_path "$pair")")
     cur=$TMP/local/$name
     [ -f "$cur" ] || continue
     old=$snapdir/$name
     if [ "$1" -eq 1 ] && [ -f "$old" ]; then
       if cmp -s "$old" "$cur"; then
-        say "  ~/$name: unchanged since last run"
+        say "  $shown: unchanged since last run"
       else
-        say "  ~/$name: changed since last run"
+        say "  $shown: changed since last run"
         # diff exits with status 1 whenever the files differ, which here is
         # expected. The pipeline's status is sed's, not diff's, but `|| :`
         # makes sure this line can never stop the script under set -e.
         diff -u -L "last run" -L "now" "$old" "$cur" | sed 's/^/    /' || :
       fi
     elif [ -s "$cur" ]; then
-      say "  ~/$name:"
+      say "  $shown:"
       sed 's/^/    | /' "$cur"
     else
-      say "  ~/$name: (empty)"
+      say "  $shown: (empty)"
     fi
   done
   # The saved files are all named after dotfiles, such as .zshrc, and * doesn't
@@ -1190,8 +1271,9 @@ cmd_doctor() {
   TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
   mkdir "$TMP/local"
 
+  zsh_dirs
   for pair in $ENTRY_FILES; do
-    doctor_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$HOME/${pair#*:}"
+    doctor_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$(entry_path "$pair")"
   done
   doctor_layers
   doctor_general
