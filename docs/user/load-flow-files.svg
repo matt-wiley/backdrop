@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="676" viewBox="0 0 1040 676" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="636" viewBox="0 0 1040 636" role="img" aria-labelledby="title desc">
   <title id="title">Which files each shell reads, and what their blocks load</title>
-  <desc id="desc">Every kind of shell start reaches the environment layer. zsh reads ~/.zshenv on every start, ~/.zprofile for login shells and ~/.zshrc for interactive ones. sh and desktop logins read ~/.profile. bash login shells read ~/.bash_profile, which sources ~/.profile and then ~/.bashrc if interactive. Interactive bash and ssh host commands read ~/.bashrc. The blocks in ~/.zshenv, ~/.zprofile and ~/.profile load the environment layer; the ~/.bashrc block loads it always and the interactive and bash layers if interactive; the ~/.zshrc block loads the interactive and zsh layers, and rc.zsh hooks load-last.zsh to the first prompt. Every path reaches layer 1, the environment. Only interactive shells reach layers 2 and 3. ~/.bash_profile sources ~/.profile, then ~/.bashrc if interactive. Each host file loads right after the shared file it overrides.</desc>
+  <desc id="desc">Every kind of shell start reaches the environment layer. zsh reads ~/.zshenv on every start, ~/.zprofile for login shells and ~/.zshrc for interactive ones. sh and desktop logins read ~/.profile. bash login shells read ~/.bash_profile, which sources ~/.profile and then ~/.bashrc if interactive. Interactive bash and ssh host commands read ~/.bashrc. The blocks in ~/.zshenv, ~/.zprofile and ~/.profile load the environment layer: sh/env.sh, then the profile's env.sh. The ~/.bashrc block loads it always, and bash/rc.bash and the profile's rc.bash if interactive. The ~/.zshrc block loads zsh/rc.zsh and the profile's rc.zsh, and rc.zsh loads the plugins listed in _df_load_last at the first prompt. Each profile file loads right after the shared file it overrides.</desc>
   <style>
   :root, svg {
     --bg: #ffffff; --panel: #ffffff; --ground: #f5f7f9; --fg: #1a2027; --muted: #5a6572; --line: #c6ced6;
@@ -33,7 +33,7 @@
   .sm { fill: var(--muted); font: 400 11.5px ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; }
   .arrow { fill: none; stroke: currentColor; stroke-width: 1.3; }
 </style>
-  <rect class="bg" width="1040" height="676" rx="12"/>
+  <rect class="bg" width="1040" height="636" rx="12"/>
   <g transform="translate(20 20)">
 
           <defs>
@@ -101,50 +101,40 @@
 
           <!-- B to C -->
           <line class="arrow" x1="540" y1="64" x2="676" y2="64" marker-end="url(#ah)"/>
-          <line class="arrow" x1="540" y1="124" x2="676" y2="108" marker-end="url(#ah)"/>
+          <line class="arrow" x1="540" y1="124" x2="676" y2="100" marker-end="url(#ah)"/>
           <text class="lab" x="546" y="142">again, after path_helper</text>
-          <line class="arrow" x1="540" y1="184" x2="676" y2="156" marker-end="url(#ah)"/>
-          <line class="arrow" x1="540" y1="332" x2="676" y2="196" marker-end="url(#ah)"/>
-          <text class="lab" x="588" y="270" text-anchor="end">always</text>
-          <line class="arrow" x1="540" y1="342" x2="676" y2="282" marker-end="url(#ah)"/>
-          <line class="arrow" x1="540" y1="354" x2="676" y2="372" marker-end="url(#ah)"/>
-          <text class="lab" x="566" y="346">if interactive</text>
-          <line class="arrow" x1="540" y1="436" x2="676" y2="400" marker-end="url(#ah)"/>
-          <line class="arrow" x1="540" y1="452" x2="676" y2="488" marker-end="url(#ah)"/>
+          <line class="arrow" x1="540" y1="184" x2="676" y2="136" marker-end="url(#ah)"/>
+          <line class="arrow" x1="540" y1="332" x2="676" y2="170" marker-end="url(#ah)"/>
+          <text class="lab" x="600" y="250" text-anchor="end">always</text>
+          <line class="arrow" x1="540" y1="352" x2="676" y2="342" marker-end="url(#ah)"/>
+          <text class="lab" x="566" y="372">if interactive</text>
+          <line class="arrow" x1="540" y1="444" x2="676" y2="462" marker-end="url(#ah)"/>
 
           <!-- Column C: layers -->
-          <rect class="b1" x="680" y="36" width="304" height="176" rx="8"/>
-          <text class="t" x="696" y="60">1 · Environment</text>
+          <rect class="b1" x="680" y="36" width="304" height="150" rx="8"/>
+          <text class="t" x="696" y="60">Environment</text>
           <text class="s" x="968" y="60" text-anchor="end">every shell</text>
-          <text class="m" x="732" y="96">sh/env.sh</text>
-          <text class="s" x="696" y="124">then</text>
-          <text class="m" x="732" y="124">sh/os/&lt;os&gt;.sh</text>
-          <text class="s" x="696" y="152">then</text>
-          <text class="m" x="732" y="152">hosts/&lt;profile&gt;/env.sh</text>
-          <text class="s" x="696" y="194">POSIX sh · silent · exports only</text>
+          <text class="m" x="696" y="96">sh/env.sh</text>
+          <text class="sm" x="696" y="116">then hosts/&lt;profile&gt;/env.sh</text>
+          <text class="s" x="696" y="150">PATH and exports scripts need</text>
+          <text class="s" x="696" y="168">POSIX sh · silent · exports only</text>
 
-          <rect class="b3" x="680" y="232" width="304" height="84" rx="8"/>
-          <text class="t" x="696" y="256">3 · bash only</text>
-          <text class="s" x="968" y="256" text-anchor="end">interactive bash</text>
-          <text class="m" x="696" y="282">bash/rc.bash</text>
-          <text class="sm" x="696" y="302">then hosts/&lt;profile&gt;/rc.bash</text>
+          <rect class="b2" x="680" y="300" width="304" height="84" rx="8"/>
+          <text class="t" x="696" y="324">Interactive bash</text>
+          <text class="s" x="968" y="324" text-anchor="end">only you need it</text>
+          <text class="m" x="696" y="350">bash/rc.bash</text>
+          <text class="sm" x="696" y="370">then hosts/&lt;profile&gt;/rc.bash</text>
 
-          <rect class="b2" x="680" y="336" width="304" height="84" rx="8"/>
-          <text class="t" x="696" y="360">2 · Interactive</text>
-          <text class="s" x="968" y="360" text-anchor="end">bash and zsh</text>
-          <text class="m" x="696" y="386">sh/interactive.sh</text>
-          <text class="sm" x="696" y="406">then hosts/&lt;profile&gt;/interactive.sh</text>
+          <rect class="b2" x="680" y="420" width="304" height="84" rx="8"/>
+          <text class="t" x="696" y="444">Interactive zsh</text>
+          <text class="s" x="968" y="444" text-anchor="end">only you need it</text>
+          <text class="m" x="696" y="470">zsh/rc.zsh</text>
+          <text class="sm" x="696" y="490">then hosts/&lt;profile&gt;/rc.zsh</text>
 
-          <rect class="b3" x="680" y="440" width="304" height="84" rx="8"/>
-          <text class="t" x="696" y="464">3 · zsh only</text>
-          <text class="s" x="968" y="464" text-anchor="end">interactive zsh</text>
-          <text class="m" x="696" y="490">zsh/rc.zsh</text>
-          <text class="sm" x="696" y="510">then hosts/&lt;profile&gt;/rc.zsh</text>
-
-          <line class="arrow" x1="832" y1="524" x2="832" y2="564" marker-end="url(#ah)"/>
-          <text class="lab" x="842" y="549">registers a hook</text>
-          <rect class="b3d" x="680" y="568" width="304" height="54" rx="8"/>
-          <text class="m" x="696" y="591">zsh/load-last.zsh</text>
-          <text class="s" x="696" y="609">once, at the first prompt</text>
+          <line class="arrow" x1="832" y1="504" x2="832" y2="540" marker-end="url(#ah)"/>
+          <text class="lab" x="842" y="526">registers a hook</text>
+          <rect class="b3d" x="680" y="544" width="304" height="54" rx="8"/>
+          <text class="m" x="696" y="567">_df_load_last plugins</text>
+          <text class="s" x="696" y="585">once, at the first prompt</text>
   </g>
 </svg>

@@ -658,7 +658,7 @@ doctor_general() {
     if [ ! -e "$conf" ]; then
       report info "$(show "$conf") not generated yet (\`dotfiles sync-env\`)"
     else
-      for f in sh/env.sh sh/os/linux.sh "hosts/$profile/env.sh"; do
+      for f in sh/env.sh "hosts/$profile/env.sh"; do
         if [ -f "$DOTFILES_DIR/$f" ] && [ "$DOTFILES_DIR/$f" -nt "$conf" ]; then
           report warn "$(show "$conf") is older than $f (\`dotfiles sync-env\`)"
           break
@@ -741,10 +741,9 @@ doctor_layers() {
   say "layers"
   before=$((ERRORS + WARNINGS))
   host=hosts/$(read_profile)
-  parse_check "sh bash zsh" sh/lib.sh sh/env.sh sh/os/linux.sh sh/os/darwin.sh "$host/env.sh"
-  parse_check "bash zsh" sh/interactive.sh "$host/interactive.sh"
+  parse_check "sh bash zsh" sh/lib.sh sh/env.sh "$host/env.sh"
   parse_check bash bash/rc.bash "$host/rc.bash"
-  parse_check zsh zsh/rc.zsh zsh/load-last.zsh "$host/rc.zsh"
+  parse_check zsh zsh/rc.zsh "$host/rc.zsh"
   [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "every layer file parses"
 }
 

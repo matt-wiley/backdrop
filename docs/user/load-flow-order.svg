@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1088" height="392" viewBox="0 0 1088 392" role="img" aria-labelledby="title desc">
   <title id="title">The order inside one login shell</title>
-  <desc id="desc">A zsh login and interactive shell runs ~/.zshenv with the environment layer and your lines, the system zprofile where macOS path_helper reorders PATH, ~/.zprofile with the environment layer again, the system zshrc, ~/.zshrc with the interactive and zsh layers and your lines, then load-last.zsh at the first prompt. A bash login and interactive shell runs the system profile, the ~/.bash_profile block, ~/.profile with the environment layer and your lines, ~/.bashrc with the environment layer again, the interactive and bash layers and your lines, and finally the rest of ~/.bash_profile. Each entry file runs its block first, then your own lines below it. Login shells load the environment layer twice, which is harmless because it is idempotent; in zsh the second load puts the repo PATH back in front after macOS path_helper.</desc>
+  <desc id="desc">A zsh login and interactive shell runs ~/.zshenv with the environment layer and your lines, the system zprofile where macOS path_helper reorders PATH, ~/.zprofile with the environment layer again, the system zshrc, ~/.zshrc with rc.zsh, the profile's rc.zsh and your lines, then the load-last plugins at the first prompt. A bash login and interactive shell runs the system profile, the ~/.bash_profile block, ~/.profile with the environment layer and your lines, ~/.bashrc with the environment layer again, rc.bash, the profile's rc.bash and your lines, and finally the rest of ~/.bash_profile. Each entry file runs its block first, then your own lines below it. Login shells load the environment layer twice, which is harmless because it is idempotent; in zsh the second load puts the repo PATH back in front after macOS path_helper.</desc>
   <style>
   :root, svg {
     --bg: #ffffff; --panel: #ffffff; --ground: #f5f7f9; --fg: #1a2027; --muted: #5a6572; --line: #c6ced6;
@@ -82,17 +82,15 @@
           <rect class="box" x="716" y="28" width="150" height="112" rx="7"/>
           <text class="m" x="728" y="50">~/.zshrc</text>
           <rect class="sw2" x="728" y="64" width="8" height="8" rx="1.5"/>
-          <text class="s" x="742" y="72">interactive + host</text>
-          <rect class="sw3" x="728" y="82" width="8" height="8" rx="1.5"/>
-          <text class="s" x="742" y="90">rc.zsh + host</text>
-          <rect class="swm" x="728" y="100" width="8" height="8" rx="1.5"/>
-          <text class="s" x="742" y="108">your lines</text>
+          <text class="s" x="742" y="72">rc.zsh + host</text>
+          <rect class="swm" x="728" y="82" width="8" height="8" rx="1.5"/>
+          <text class="s" x="742" y="90">your lines</text>
 
           <line class="arrow" x1="866" y1="84" x2="890" y2="84" marker-end="url(#ah2)"/>
 
           <rect class="b3d" x="894" y="28" width="150" height="112" rx="7"/>
           <text class="ts" x="906" y="50">first prompt</text>
-          <text class="m" x="906" y="72">load-last.zsh</text>
+          <text class="m" x="906" y="72">_df_load_last</text>
           <text class="s" x="906" y="90">then the hook</text>
           <text class="s" x="906" y="106">removes itself</text>
 
@@ -129,11 +127,9 @@
           <rect class="sw1" x="550" y="224" width="8" height="8" rx="1.5"/>
           <text class="s" x="564" y="232">env layer again</text>
           <rect class="sw2" x="550" y="242" width="8" height="8" rx="1.5"/>
-          <text class="s" x="564" y="250">interactive + host</text>
-          <rect class="sw3" x="550" y="260" width="8" height="8" rx="1.5"/>
-          <text class="s" x="564" y="268">rc.bash + host</text>
-          <rect class="swm" x="550" y="278" width="8" height="8" rx="1.5"/>
-          <text class="s" x="564" y="286">your lines</text>
+          <text class="s" x="564" y="250">rc.bash + host</text>
+          <rect class="swm" x="550" y="260" width="8" height="8" rx="1.5"/>
+          <text class="s" x="564" y="268">your lines</text>
 
           <line class="arrow" x1="688" y1="244" x2="712" y2="244" marker-end="url(#ah2)"/>
 
@@ -144,11 +140,10 @@
           <text class="s" x="742" y="250">your lines, last</text>
 
   <g transform="translate(4 324)">
-    <rect class="sw1" x="0" y="0" width="12" height="12" rx="2"/><text class="s" x="18" y="10">Layer 1, environment</text>
-    <rect class="sw2" x="170" y="0" width="12" height="12" rx="2"/><text class="s" x="188" y="10">Layer 2, interactive</text>
-    <rect class="sw3" x="335" y="0" width="12" height="12" rx="2"/><text class="s" x="353" y="10">Layer 3, bash or zsh only</text>
-    <rect class="swm" x="530" y="0.5" width="11" height="11" rx="2"/><text class="s" x="548" y="10">Your lines below the block</text>
-    <rect class="sws" x="732" y="0.5" width="11" height="11" rx="2"/><text class="s" x="750" y="10">System file, not managed</text>
+    <rect class="sw1" x="0" y="0" width="12" height="12" rx="2"/><text class="s" x="18" y="10">Environment: env.sh</text>
+    <rect class="sw2" x="170" y="0" width="12" height="12" rx="2"/><text class="s" x="188" y="10">Interactive: rc.zsh or rc.bash</text>
+    <rect class="swm" x="400" y="0.5" width="11" height="11" rx="2"/><text class="s" x="418" y="10">Your lines below the block</text>
+    <rect class="sws" x="602" y="0.5" width="11" height="11" rx="2"/><text class="s" x="620" y="10">System file, not managed</text>
   </g>
   </g>
 </svg>

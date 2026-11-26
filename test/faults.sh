@@ -47,12 +47,6 @@ check "says it wrote to stdout" out_has 'wrote to stdout'
 check "shows the output" out_has '^      > hello$'
 
 setup
-append sh/interactive.sh 'if then'
-check "matrix fails on a syntax error in interactive.sh" fails run_matrix
-check "doctor fails on interactive.sh" fails run_doctor
-check "doctor checks interactive.sh with bash" out_has 'error  sh/interactive.sh does not parse in bash'
-
-setup
 append zsh/rc.zsh 'if then'
 check "matrix fails on a syntax error in rc.zsh" fails run_matrix
 check "doctor fails on rc.zsh" fails run_doctor
@@ -60,7 +54,8 @@ check "doctor checks rc.zsh with zsh" out_has 'error  zsh/rc.zsh does not parse 
 
 setup
 append bash/rc.bash 'if then'
-run_doctor
+check "matrix fails on a syntax error in rc.bash" fails run_matrix
+check "doctor fails on rc.bash" fails run_doctor
 check "doctor checks rc.bash with bash" out_has 'error  bash/rc.bash does not parse in bash'
 
 setup

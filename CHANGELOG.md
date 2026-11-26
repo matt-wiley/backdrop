@@ -6,6 +6,14 @@ Changes in each release. Versions follow [semantic versioning](https://semver.or
 
 ## Unreleased
 
+### Changed
+
+- **Run `dotfiles init` on every machine after upgrading:** the blocks are now v2. Until you do, `doctor` reports the old blocks and the missing files they name.
+- Two layers instead of three, so each setting has one obvious place: `sh/env.sh` for what scripts need, and `zsh/rc.zsh` or `bash/rc.bash` for everything else. Each still has a profile file in `hosts/<profile>/` that loads right after it.
+- `sh/interactive.sh` and `hosts/<profile>/interactive.sh` are gone; their aliases moved into both rc files. Move anything you added to them into your rc file, or your profile's.
+- `sh/os/darwin.sh` and `sh/os/linux.sh` are gone; OS-specific settings are a `case` in `sh/env.sh`, placed so the OS directories stay behind your own in `PATH`.
+- `zsh/load-last.zsh` is gone; list plugins that must load last in `_df_load_last` in `zsh/rc.zsh`. A profile's `rc.zsh` can now add to that list too.
+
 ## 1.0.1 - 2026-11-23
 
 ### Fixed

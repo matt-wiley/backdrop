@@ -1,6 +1,6 @@
 # Dotfiles system spec
 
-Nov 6, 2026 · updated Nov 23, 2026 to match the implementation · @Matt Wiley
+Nov 6, 2026 · updated Nov 25, 2026 to match the implementation · @Matt Wiley
 
 ## Overview and goals
 
@@ -21,26 +21,26 @@ The system must give correct results for every combination of these axes (24 in 
 | OS | Linux, macOS | Tool names and paths, `path_helper`, how the desktop starts the session | Detected once in the env layer; capability checks preferred over OS checks |
 | Login | login, non-login | Which startup files the shell reads; macOS Terminal opens login shells | Every entry file gets an injected block, so both paths reach the env layer |
 | Interactivity | interactive, non-interactive | Whether rc files are read | Env is unguarded; interactive layers sit behind a `$-` guard |
-| Shell | bash, zsh, POSIX `sh` | File names, syntax, completion and option systems | Shared layers are POSIX `sh`; only the shell layer is shell-specific |
+| Shell | bash, zsh, POSIX `sh` | File names, syntax, completion and option systems | The env layer is POSIX `sh`; each shell has one interactive file |
 
 ## Architecture
 
-Settings are organized by kind, not by shell: environment, shared interactive, and shell-specific interactive. Each shell entry file carries only a small injected block that routes into those layers.
+Settings are split by one question, whether a script would need them, into two layers: environment and interactive. Environment is shared by every shell; interactive config is one file per shell. Each layer has a shared file and an optional profile file that loads right after it. Each shell entry file carries only a small injected block that routes into those layers.
 
 ```
 entry file          block loads                                   layer
 ~/.profile      ─┐
 ~/.zshenv       ─┤
-~/.zprofile     ─┼─> sh/env.sh, host env.sh                       1  every shell
+~/.zprofile     ─┼─> sh/env.sh, host env.sh                       env, every shell
 ~/.bashrc       ─┘
-~/.bashrc  (if interactive) ─> sh/interactive.sh, host file       2  interactive
-                               bash/rc.bash, host file            3  bash only
-~/.zshrc                    ─> sh/interactive.sh, host file       2  interactive
-                               zsh/rc.zsh, host file              3  zsh only
+~/.bashrc  (if interactive) ─> bash/rc.bash, host rc.bash         interactive bash
+~/.zshrc                    ─> zsh/rc.zsh, host rc.zsh            interactive zsh
 ~/.bash_profile ─> ~/.profile, then ~/.bashrc if interactive
 ```
 
-Every shell path reaches the env layer; only interactive shells reach the two layers below it. `~/.bash_profile` reaches the layers through `~/.profile` and `~/.bashrc`.
+Every shell path reaches the env layer; only interactive shells reach their rc file. `~/.bash_profile` reaches the layers through `~/.profile` and `~/.bashrc`.
+
+An earlier design had a third, shared interactive layer (`sh/interactive.sh`), separate OS files (`sh/os/*.sh`) and a separate `zsh/load-last.zsh`. They were folded in because ten possible places for an edit made it hard to know where one belonged; the cost is that an alias wanted in both bash and zsh is written in both rc files.
 
 ## Repository layout
 
@@ -58,18 +58,13 @@ dotfiles/
     build-release.sh        # build the release files from HEAD into dist/
     release-notes.sh        # print one version's changelog section
   sh/
-    env.sh                  # layer 1: environment (POSIX)
-    interactive.sh          # layer 2: shared aliases and functions (POSIX)
+    env.sh                  # environment, every shell (POSIX); OS differences in a case
     lib.sh                  # internal helpers: _df_path_prepend, _df_has, _df_trace
-    os/darwin.sh
-    os/linux.sh
-  bash/rc.bash              # layer 3: bash interactive
-  zsh/rc.zsh                # layer 3: zsh interactive
-  zsh/load-last.zsh         # deferred plugins (syntax highlighting)
+  bash/rc.bash              # interactive bash
+  zsh/rc.zsh                # interactive zsh, including the load-last plugin list
   hosts/
     example/                # sample profile
     <profile>/env.sh        # versioned machine overrides, all optional
-    <profile>/interactive.sh
     <profile>/rc.bash
     <profile>/rc.zsh
     <profile>/packages.toml
@@ -96,10 +91,10 @@ Each shell entry file gets one marked block at its very top; everything below th
 | --- | --- | --- |
 | `~/.profile` | `env.sh`, host `env.sh` | `sh`, GDM and other desktop logins, bash login fallback |
 | `~/.bash_profile` | `~/.profile`, then `~/.bashrc` if interactive | Bash login shells read only the first of `.bash_profile`, `.bash_login` and `.profile`, and never read `.bashrc` |
-| `~/.bashrc` | `env.sh`, host `env.sh`, then guard, `interactive.sh`, host `interactive.sh`, `rc.bash`, host `rc.bash` | Env before the guard covers `ssh host cmd` |
+| `~/.bashrc` | `env.sh`, host `env.sh`, then guard, `rc.bash`, host `rc.bash` | Env before the guard covers `ssh host cmd` |
 | `~/.zshenv` | `env.sh`, host `env.sh` | Every zsh, including `zsh -c`, scripts and Claude Code |
 | `~/.zprofile` | `env.sh`, host `env.sh` (again) | Restores `PATH` order after macOS `path_helper` |
-| `~/.zshrc` | `interactive.sh`, host `interactive.sh`, `rc.zsh`, host `rc.zsh` | Interactive zsh only; `rc.zsh` registers the load-last hook |
+| `~/.zshrc` | `rc.zsh`, host `rc.zsh` | Interactive zsh only; `rc.zsh` registers the load-last hook |
 
 Each host file loads right after the shared file of the same layer, so it can override it.
 
@@ -108,7 +103,7 @@ Each host file loads right after the shared file of the same layer, so it can ov
 Templates in `blocks/` hold `@DOTFILES_DIR@`, which `init` replaces with the repo path. The `~/.profile` block:
 
 ```sh
-# >>> dotfiles v1 >>> managed by `dotfiles init`; do not edit inside
+# >>> dotfiles v2 >>> managed by `dotfiles init`; do not edit inside
 DOTFILES_DIR="$HOME/.dotfiles"   # repo path, written by init
 [ -r "$DOTFILES_DIR/sh/env.sh" ] && . "$DOTFILES_DIR/sh/env.sh"
 [ -r "$DOTFILES_DIR/hosts/${DOTFILES_PROFILE-}/env.sh" ] && . "$DOTFILES_DIR/hosts/${DOTFILES_PROFILE-}/env.sh"
@@ -130,11 +125,17 @@ DOTFILES_DIR="$HOME/.dotfiles"   # repo path, written by init
 
 Anything that must load after the whole rc file runs from a one-shot hook at the first prompt, so lines appended below the block cannot get in front of it.
 
-**zsh:** `rc.zsh` registers a `precmd` function that sources `load-last.zsh` (zsh-syntax-highlighting, autosuggestions) and then removes itself.
+**zsh:** `rc.zsh` defines the `_df_load_last` array of plugin paths (zsh-syntax-highlighting, autosuggestions) and registers a `precmd` function that sources them and then removes itself. Each entry lists the places a plugin may live, separated by `:`; the first readable one is sourced. A profile's `rc.zsh` loads before the first prompt, so it can append entries.
 
 ```zsh
 _dotfiles_load_last() {
-  [[ -r $DOTFILES_DIR/zsh/load-last.zsh ]] && source $DOTFILES_DIR/zsh/load-last.zsh
+  local entry f
+  for entry in $_df_load_last; do
+    for f in ${(s.:.)entry}; do
+      if [[ -r $f ]]; then source $f; break; fi
+    done
+  done
+  unset _df_load_last
   add-zsh-hook -d precmd _dotfiles_load_last
   unfunction _dotfiles_load_last
 }
@@ -153,7 +154,7 @@ Per-machine settings that should be versioned live in `hosts/<profile>/`, and ea
 - **Selector:** `~/.config/dotfiles/host` holds one line, the profile name. Hostnames are not used: macOS hostnames can change with the network. `env.sh` reads it into `DOTFILES_PROFILE`, an unexported shell variable the blocks use to find host files.
 - **Names:** a profile name may not contain `/` or start with `-`.
 - **Sharing:** several machines may name the same profile.
-- **Files:** `env.sh`, `interactive.sh`, `rc.bash`, `rc.zsh`, each optional. Each is sourced right after the shared file of the same layer, so it can override it.
+- **Files:** `env.sh`, `rc.bash`, `rc.zsh`, each optional. Each is sourced right after the shared file of the same layer, so it can override it.
 - **No profile:** if the selector is missing or names no directory, host files are skipped silently.
 - **Unversioned changes:** anything below the injected block in a machine's entry file stays local and unreported, except through `doctor`.
 - **Secrets:** never in `hosts/`. Keep them below the block, or in a gitignored file the host layer sources; `.gitignore` already excludes `hosts/*/*.local.sh` and `hosts/*/secrets*`.
@@ -162,7 +163,7 @@ Per-machine settings that should be versioned live in `hosts/<profile>/`, and ea
 
 The env layer must be safe to run anywhere, any number of times; the interactive layers may be richer but never run outside a prompt.
 
-**Env layer (`env.sh`, host `env.sh`, `os/*.sh`)**
+**Env layer (`env.sh`, host `env.sh`)**
 
 - POSIX `sh` only, so `sh`, bash and zsh can all source it.
 - Idempotent: `_df_path_prepend` dedupes and moves an entry to the front, so double sourcing is harmless.
@@ -171,17 +172,18 @@ The env layer must be safe to run anywhere, any number of times; the interactive
 - Exports only: variables and `PATH`; no aliases or shell options. The only functions are the `lib.sh` helpers, prefixed `_df_`.
 - Version managers through shims (mise or similar), never by sourcing nvm.
 
-**Interactive layers**
+- OS differences sit in one `case $DOTFILES_OS` near the top of the `PATH` section, so OS directories land behind the repo's own.
 
-- Shared `interactive.sh` is POSIX: aliases and simple functions both shells accept.
-- Shell-specific code (options, completion, keybinds, prompt) goes only in `rc.bash` or `rc.zsh`.
+**Interactive layer (`rc.bash`, `rc.zsh`, host files)**
+
+- Everything a script doesn't need: aliases, functions, options, completion, keybinds, prompt, tool init and plugins. Each file uses its shell's full syntax.
 - Guarded on `$-` containing `i`.
 - Detect tools, not OS: `_df_has fdfind && alias fd=fdfind`.
 - Tool init output (starship, zoxide, fzf) is cached under `~/.cache/dotfiles/` and regenerated when the tool binary changes.
 - `compinit` uses its cache (`-C`) and rebuilds the dump, `~/.cache/dotfiles/zcompdump`, at most once a day. `env.sh` sets `skip_global_compinit=1` (a plain shell variable, not exported) so Ubuntu's `/etc/zsh/zshrc` doesn't run a second, uncached `compinit`; without it, that `compinit` roughly doubled zsh startup and aborted with an error on systems whose completion directories it considers insecure.
 - A missing tool is skipped quietly; it never prints an error at startup.
 - No aliases or functions that shadow builtins or common commands (`cd`, `ls`, `cat`, `grep`, `find`); use distinct names such as `z`, `ll` and `bat`.
-- Human-only conveniences sit in a section of `interactive.sh` that is skipped when an agent is detected (`CLAUDECODE=1` for Claude Code; verify the variable on install).
+- Human-only conveniences sit in a section of each rc file that is skipped when an agent is detected (`CLAUDECODE=1` for Claude Code; verify the variable on install).
 
 ## CLI
 
@@ -215,11 +217,11 @@ A single POSIX `sh` script, `bin/dotfiles`, with seven commands, each accepting 
 
 - **Error:** entry file missing, block missing, block not first (the first line that is neither blank nor a shebang isn't the opening marker), more than one block, or an unterminated or nested block.
 - **Error:** `DOTFILES_DIR` does not exist, or a file the block always sources is missing, including `sh/lib.sh`, which `env.sh` needs.
-- **Error:** a layer file doesn't parse (`-n`) in a shell that loads it: the env layer files in `sh`, bash and zsh; `interactive.sh` in bash and zsh; each rc file in its own shell. The selected profile's files are checked too. Shells that aren't installed are skipped.
+- **Error:** a layer file doesn't parse (`-n`) in a shell that loads it: the env layer files in `sh`, bash and zsh; each rc file in its own shell. The selected profile's files are checked too. Shells that aren't installed are skipped.
 - **Warning:** block version older or newer than the repo's.
 - **Warning:** block edited inside the markers (it differs from what `init` would write), or `DOTFILES_DIR` points at a different copy of the repo.
 - **Warning:** selector missing, or it names a profile with no directory.
-- **Warning:** on Linux, `environment.d/dotfiles.conf` is older than `env.sh`, `os/linux.sh` or the host `env.sh`. **Info** if it has not been generated yet.
+- **Warning:** on Linux, `environment.d/dotfiles.conf` is older than `env.sh` or the host `env.sh`. **Info** if it has not been generated yet.
 - **Warning:** an alias or function shadows a builtin or common command. `doctor` starts interactive bash and zsh and compares their aliases and functions against each shell's builtins and a fixed list of common commands, so definitions from below the block and from `/etc` count too. A warning also if this check cannot run.
 - **Warning:** on Linux, a distro skeleton's full text appears below a block.
 - **Info:** a required tool from `packages.toml` is missing.
@@ -269,12 +271,12 @@ A trace mode plus a matrix script prove which files load in each shell, and CLI 
 | `sh -lc` | env |
 | `bash -c` | none |
 | `bash -lc` | env |
-| `bash -ic` | env, interactive, bash |
-| `bash -lic` | env (twice, idempotent), interactive, bash |
+| `bash -ic` | env, bash |
+| `bash -lic` | env (twice, idempotent), bash |
 | `zsh -c` | env |
 | `zsh -lc` | env (twice, idempotent) |
-| `zsh -ic` | env, interactive, zsh |
-| `zsh -lic` | env (twice, idempotent), interactive, zsh |
+| `zsh -ic` | env, zsh |
+| `zsh -lic` | env (twice, idempotent), zsh |
 
 **Extra assertions**
 
@@ -319,7 +321,7 @@ A trace mode plus a matrix script prove which files load in each shell, and CLI 
 Everything above is implemented except:
 
 - **Caches:** tool init output for starship, zoxide and fzf is not generated or cached; `init` only creates the cache directory.
-- **Interactive layers:** `load-last.zsh` loads no plugins yet; `rc.bash` and `rc.zsh` have no completion setup beyond `compinit`, prompt or keybinds; the agent-only section of `interactive.sh` is empty, and `install` does not verify `CLAUDECODE`.
+- **Interactive layer:** `_df_load_last` lists no plugins yet; `rc.bash` and `rc.zsh` have no completion setup beyond `compinit`, prompt or keybinds; the agent-only sections of the rc files are empty, and `install` does not verify `CLAUDECODE`.
 - **Testing:**
   - The matrix asserts layers but not `PATH` entries.
   - Not implemented: the `PATH` duplicate and order assertion, the missing-repo assertion, the `hyperfine` startup budget and its CI thresholds.
