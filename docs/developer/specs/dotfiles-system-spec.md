@@ -50,13 +50,6 @@ The repo holds layers, per-shell code, machine profiles and the CLI; it holds no
 dotfiles/
   bin/dotfiles              # CLI: init, install, doctor, sync-env, test, uninstall, version
   packages.toml             # tool list for `install`
-  VERSION                   # current release, X.Y.Z
-  CHANGELOG.md              # changes per release; Unreleased becomes the next release's notes
-  install.sh                # installer for a release, without git
-  scripts/
-    release.sh              # cut a release: bump VERSION, date the changelog, commit, tag
-    build-release.sh        # build the release files from HEAD into dist/
-    release-notes.sh        # print one version's changelog section
   sh/
     env.sh                  # environment, every shell (POSIX); OS differences in a case
     lib.sh                  # internal helpers: _df_path_prepend, _df_has, _df_trace
@@ -74,11 +67,9 @@ dotfiles/
     matrix.sh               # load matrix
     init.sh uninstall.sh doctor.sh sync-env.sh install.sh   # CLI suites
     faults.sh               # broken layers must be caught
-    release.sh              # building, installing and cutting releases
     lib.sh                  # helpers shared by the CLI suites
   .github/workflows/test.yml      # tests on every push and pull request
-  .github/workflows/release.yml   # publishes a release when a vX.Y.Z tag is pushed
-  .gitignore                # keeps host secrets files and dist/ out of the repo
+  .gitignore                # keeps host secrets files out of the repo
 ```
 
 All paths inside the repo are resolved from `DOTFILES_DIR`, which each injected block sets. `init` resolves the repo's own location, following symlinks to `bin/dotfiles`, and writes it into every block: as `$HOME/...` when the repo is inside the home directory, otherwise as an absolute path. The default clone path is `~/.dotfiles`. Moving the repo means re-running `init`; `doctor` warns when a block points somewhere else.
@@ -197,7 +188,7 @@ A single POSIX `sh` script, `bin/dotfiles`, with seven commands, each accepting 
 | `sync-env` | Linux only; an error on macOS. Writes `~/.config/environment.d/dotfiles.conf` from the variables the `~/.profile` block exports (see below). Takes effect at next login. |
 | `test [--profile]` | Runs the CLI test suites, then the matrix (see Testing) with this machine's profile; `--profile` adds a zsh startup profile. |
 | `uninstall` | Removes every block (see injection rule 6) and `environment.d/dotfiles.conf`. Leaves the selector, caches and machine content, and says so. |
-| `version` | Prints the version in `VERSION`; in a git clone, also the commit from `git describe`. Also `--version`. |
+| `version` | Prints the git commit the repo is on, marked `-dirty` when there are uncommitted changes. Also `--version`. |
 
 ### Install command
 
@@ -235,28 +226,6 @@ A single POSIX `sh` script, `bin/dotfiles`, with seven commands, each accepting 
 - **Freshness:** the file is rewritten every run, so removed variables disappear; an unchanged file gets a new timestamp so `doctor` sees it as current.
 - **Failures:** if the env layer fails, the previous file is kept and the command exits non-zero; if the env layer prints anything, it warns but still writes the file.
 
-## Releases
-
-A release lets a machine install the dotfiles without git. Each one is a GitHub Release, tagged `vX.Y.Z`, with three files:
-
-- `backdrop-vX.Y.Z.zip`: the repo as committed at the tag, built with `git archive`, in a `backdrop-vX.Y.Z/` folder.
-- `install.sh`: the repo's installer with its `RELEASE_VERSION` set to `X.Y.Z`.
-- `SHA256SUMS`: checksums of both.
-
-**Versioning:** `VERSION` holds the current version, following semantic versioning. A major version means users must act after upgrading, such as running `init` for a new block version. Changes are recorded under `## Unreleased` in `CHANGELOG.md`.
-
-**Process:** `scripts/release.sh X.Y.Z` refuses unless the version is newer, the tree is clean on an up-to-date `main`, the Unreleased section has entries and the tests pass. It then writes `VERSION`, dates the changelog section, commits and tags. Pushing the tag runs the release workflow: the test workflow on both operating systems, a check that the tag matches `VERSION`, then `scripts/build-release.sh` and `gh release create` with the changelog section as notes.
-
-**Installer (`install.sh`):** POSIX `sh`, meant to be piped from curl or wget (`… | sh`, options after `sh -s --`).
-
-- Everything runs inside `main`, called on the last line, so a truncated download runs nothing. Children get `/dev/null` as stdin, so none of them can read the rest of the piped script.
-- Downloads `releases/download/vX.Y.Z/` assets (overridable with `DOTFILES_RELEASE_BASE`), and refuses to install when the checksum file is missing or doesn't match; `--zip FILE` installs a local ZIP without the network or a checksum.
-- Extracts with `unzip`, else `python3 -m zipfile`, else `bsdtar`, into a folder next to the target, and restores the CLI's executable bit.
-- Installs to `~/.dotfiles` or `--dir`. It refuses a git clone or a folder that isn't an earlier release. An earlier release moves to `<dir>.previous-<version>`, and profiles in its `hosts/` that the new release lacks are copied over.
-- Links `~/.local/bin/dotfiles` unless something other than a symlink is there, then runs `dotfiles init` (with `--profile`), unless `--no-init`.
-
-Anonymous downloads need the repository to be public.
-
 ## Testing
 
 A trace mode plus a matrix script prove which files load in each shell, and CLI suites cover each command; CI runs them on both operating systems for every push.
@@ -288,14 +257,14 @@ A trace mode plus a matrix script prove which files load in each shell, and CLI 
 - A block with a missing repo produces no error.
 - Startup time for `zsh -ic exit` stays under 100 ms, the median of 10 runs with `hyperfine`. CI warns above 100 ms and fails above 200 ms, since shared runners are noisy. `dotfiles test --profile` loads `zsh/zprof` to show what is slow.
 
-**CLI suites:** `test/init.sh`, `test/uninstall.sh`, `test/doctor.sh`, `test/sync-env.sh` and `test/install.sh` run each command against scratch home directories holding a copy of the repo at `~/.dotfiles`. `test/faults.sh` breaks one layer file at a time in a copy (an `exit`, a syntax error, a failing command, output), and checks that the matrix fails and that `doctor` reports syntax errors. `test/release.sh` builds releases from a scratch git copy of the working tree, serves them from a local HTTP server, installs them by piping `install.sh` from curl and wget, and covers upgrades, refusals, the release notes and `scripts/release.sh` against a scratch origin; it's skipped outside a git clone or without `python3`.
+**CLI suites:** `test/init.sh`, `test/uninstall.sh`, `test/doctor.sh`, `test/sync-env.sh` and `test/install.sh` run each command against scratch home directories holding a copy of the repo at `~/.dotfiles`. `test/faults.sh` breaks one layer file at a time in a copy (an `exit`, a syntax error, a failing command, output), and checks that the matrix fails and that `doctor` reports syntax errors.
 
 - `install` runs against fake package managers and a fake `sudo` that only log their arguments; nothing is installed.
 - On Linux, `sync-env` output is also read back with systemd's own `environment.d` generator when it is present.
 - The suites unset `XDG_CONFIG_HOME` and `XDG_CACHE_HOME`, so they never touch the real `~/.config` or `~/.cache`.
 - A failed check prints the CLI output it was checking.
 
-**CI:** GitHub Actions on `ubuntu-latest` and `macos-latest`, running `dotfiles test` on every push to a branch and every pull request; the release workflow runs the same workflow before publishing. The Ubuntu job installs zsh first. Linux-only checks (skeletons, `environment.d`, `sync-env`) are skipped on macOS.
+**CI:** GitHub Actions on `ubuntu-latest` and `macos-latest`, running `dotfiles test` on every push to a branch and every pull request. The Ubuntu job installs zsh first. Linux-only checks (skeletons, `environment.d`, `sync-env`) are skipped on macOS.
 
 ## Out of scope and decisions
 
@@ -313,7 +282,7 @@ A trace mode plus a matrix script prove which files load in each shell, and CLI 
 | GUI environment, macOS | Not supported in v1; `launchctl setenv` with a LaunchAgent is the escape hatch | — |
 | Tool installation | Separate `install` command with `packages.toml`; runtimes through a `mise` key | CLI |
 | Repo location | Any path; `init` writes it into the blocks; default `~/.dotfiles` | Repository layout |
-| Installing without git | A GitHub Release per version: the repo as a ZIP, a stamped `install.sh` and checksums; piped from curl or wget | Releases |
+| Installing without git | Not supported: the repo is meant to be edited and versioned, so every machine uses a git clone. An earlier design shipped versioned ZIP releases with a curl-piped `install.sh`; they were removed because upgrades overwrote local edits | Repository layout |
 | Agent shells (Claude Code snapshot) | No aliases that shadow commands, plus an agent guard | Layer authoring rules |
 
 ## Implementation status
