@@ -4,9 +4,14 @@ This repo gives every shell on every machine the same config, with each setting 
 
 It doesn't replace your `~/.zshrc`, `~/.bashrc` or other startup files. Instead, `dotfiles init` adds a small marked block at the top of each one, and that block loads the config from this repo. Everything below the block stays yours: hand edits, lines that installers append, and anything specific to one machine.
 
-![Which startup files each kind of shell reads, and which layers each file's block loads](load-flow-files.svg)
+The config comes in two layers, loaded top to bottom. Each row can add to or override the rows above it:
 
-Every shell reaches the environment layer, `sh/env.sh`; only interactive shells reach `zsh/rc.zsh` or `bash/rc.bash`. [Editing the layers](02-editing-layers.md#how-the-layers-fit-together) shows the order inside a single shell start.
+![The layers, in the order they load: env.sh and the profile's env.sh, then rc.zsh or rc.bash and the profile's rc file, then your own lines, then load-last plugins](layer-stack.svg)
+
+- **Environment** (`sh/env.sh`): `PATH` and exported variables. It loads in every shell that reads a startup file, including `zsh -c` and `ssh host cmd`, so tools that start their own shells get the same `PATH` as your terminal.
+- **Interactive** (`zsh/rc.zsh` or `bash/rc.bash`): everything else. It loads only in shells with a prompt.
+
+[Editing the layers](02-editing-layers.md#how-the-layers-fit-together) shows which shells read which startup files.
 
 ## What you need
 
@@ -118,7 +123,7 @@ A few things sit outside that grid:
 
 ### Rules for `env.sh`
 
-The env layer runs in every shell, including the many non-interactive shells that scripts and tools start. Keep it safe and fast:
+The env layer runs in every shell that reads a startup file, including the many non-interactive ones that scripts and tools start, such as every `zsh -c`. Keep it safe and fast:
 
 - **POSIX `sh` only.** No bash or zsh syntax, because `sh` loads it too.
 - **Silent.** No output, ever.

@@ -1,10 +1,25 @@
-# packages.toml: tools for `dotfiles install`.
-# One table per logical tool, mapping each package manager to its package name.
-# Omit a manager to skip the tool there. `required` tools are reported by doctor.
-# `bin` lists the commands that count as installed (any one); default: the name.
-# `mise = "SPEC"` installs the tool with `mise use -g SPEC` instead of the
-# package manager; use it for runtimes, e.g. [node] mise = "node@lts".
-# hosts/<profile>/packages.toml adds tools; a table there replaces the shared one.
+# packages.toml
+#
+# The tools `dotfiles install` installs. Each [table] is one tool, and maps
+# each package manager to the name the tool has there, because the same tool
+# is often packaged under different names (fd is "fd-find" on apt).
+#
+#   [fd]
+#   bin = "fd fdfind"   # Commands that count as "installed"; any one is
+#                       # enough. Defaults to the table's name. Needed when the
+#                       # command isn't called the same as the tool.
+#   required = true     # `dotfiles doctor` reports the tool when it's missing.
+#   brew = "fd"         # The package name for each manager. Leave a manager
+#   apt = "fd-find"     # out and the tool is skipped on systems that use it.
+#
+#   [node]
+#   mise = "node@lts"   # Install with `mise use -g` instead of a package
+#                       # manager. Use this for language runtimes, so the
+#                       # version is chosen per project instead of fixed by
+#                       # the OS's package.
+#
+# A profile can add tools in hosts/<profile>/packages.toml. A table there with
+# the same name as one here replaces it on that profile's machines.
 
 [ripgrep]
 bin = "rg"

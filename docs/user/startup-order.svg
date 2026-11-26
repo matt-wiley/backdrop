@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="660" viewBox="0 0 880 660" role="img" aria-labelledby="title desc">
+  <title id="title">Startup files, in order, for a zsh and a bash login terminal</title>
+  <desc id="desc">Two lanes, read top to bottom. zsh, login and interactive: ~/.zshenv runs the environment layer (rows 1 and 2) then your lines; the system zprofile, where macOS path_helper reorders PATH; ~/.zprofile runs the environment layer again, putting the repo's PATH back in front, then your lines; the system zshrc, where Ubuntu's compinit is skipped; ~/.zshrc runs rc.zsh and the profile's rc.zsh (rows 3 and 4) then your lines (row 5); at the first prompt the _df_load_last plugins load (row 6). bash, login and interactive: the system profile; the ~/.bash_profile block, which sources ~/.profile and then ~/.bashrc; ~/.profile runs the environment layer then your lines; ~/.bashrc runs the environment layer again, rc.bash and the profile's rc.bash, then your lines; finally your own lines in ~/.bash_profile. Loading the environment layer twice is harmless because it is idempotent.</desc>
+  <style>
+  :root, svg {
+    --bg: #ffffff; --panel: #ffffff; --ground: #f5f7f9; --fg: #1a2027; --muted: #5a6572; --line: #c6ced6;
+    --l1: #dcf0ec; --l1-edge: #2c8a7e; --l2: #f9ead2; --l2-edge: #a86d16; --l3: #e8e4f6; --l3-edge: #6656b0;
+  }
+  @media (prefers-color-scheme: dark) {
+    svg {
+      --bg: #11161b; --panel: #192028; --ground: #11161b; --fg: #e2e8ee; --muted: #9aa6b2; --line: #38424d;
+      --l1: #143430; --l1-edge: #5cc4b5; --l2: #382a12; --l2-edge: #e2a74f; --l3: #25213f; --l3-edge: #a99ef2;
+    }
+  }
+  svg { color: var(--muted); }
+  .bg { fill: var(--bg); }
+  .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+  .sys { fill: var(--ground); stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 4 3; }
+  .b3d { fill: var(--l3); stroke: var(--l3-edge); stroke-width: 1.4; stroke-dasharray: 5 3; }
+  .sw1 { fill: var(--l1-edge); } .sw2 { fill: var(--l2-edge); } .sw3 { fill: var(--l3-edge); }
+  .swm { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+  .sws { fill: var(--ground); stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 2; }
+  .lane { fill: var(--fg); font: 600 13px system-ui, -apple-system, "Segoe UI", "DejaVu Sans", sans-serif; }
+  .ts { fill: var(--muted); font: 500 12.5px system-ui, -apple-system, "Segoe UI", "DejaVu Sans", sans-serif; }
+  .s { fill: var(--muted); font: 400 11.5px system-ui, -apple-system, "Segoe UI", "DejaVu Sans", sans-serif; }
+  .lab { fill: var(--muted); font: italic 400 11.5px system-ui, -apple-system, "Segoe UI", "DejaVu Sans", sans-serif; }
+  .m { fill: var(--fg); font: 500 12.5px ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; }
+  .arrow { fill: none; stroke: currentColor; stroke-width: 1.3; }
+</style>
+  <rect class="bg" width="880" height="660" rx="12"/>
+  <defs>
+    <marker id="so-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <!-- Lane 1: zsh -->
+  <text class="lane" x="24" y="36">zsh, login and interactive</text>
+  <text class="s" x="24" y="54">for example, a new macOS Terminal window</text>
+
+  <rect class="box" x="24" y="72" width="392" height="64" rx="7"/>
+  <text class="m" x="38" y="93">~/.zshenv</text>
+  <rect class="sw1" x="38" y="104" width="8" height="8" rx="1.5"/>
+  <text class="s" x="52" y="112">rows 1–2: env.sh, profile env.sh</text>
+  <rect class="swm" x="38" y="119" width="8" height="8" rx="1.5"/>
+  <text class="s" x="52" y="127">your lines</text>
+  <line class="arrow" x1="220" y1="136" x2="220" y2="154" marker-end="url(#so-ah)"/>
+
+  <rect class="sys" x="24" y="158" width="392" height="46" rx="7"/>
+  <text class="ts" x="38" y="179">system zprofile</text>
+  <text class="s" x="38" y="195">macOS: path_helper reorders PATH</text>
+  <line class="arrow" x1="220" y1="204" x2="220" y2="222" marker-end="url(#so-ah)"/>
+
+  <rect class="box" x="24" y="226" width="392" height="64" rx="7"/>
+  <text class="m" x="38" y="247">~/.zprofile</text>
+  <rect class="sw1" x="38" y="258" width="8" height="8" rx="1.5"/>
+  <text class="s" x="52" y="266">rows 1–2 again: the repo's PATH back in front</text>
+  <rect class="swm" x="38" y="273" width="8" height="8" rx="1.5"/>
+  <text class="s" x="52" y="281">your lines</text>
+  <line class="arrow" x1="220" y1="290" x2="220" y2="308" marker-end="url(#so-ah)"/>
+
+  <rect class="sys" x="24" y="312" width="392" height="46" rx="7"/>
+  <text class="ts" x="38" y="333">system zshrc</text>
+  <text class="s" x="38" y="349">Ubuntu: its uncached compinit is skipped</text>
+  <line class="arrow" x1="220" y1="358" x2="220" y2="376" marker-end="url(#so-ah)"/>
+
+  <rect class="box" x="24" y="380" width="392" height="64" rx="7"/>
+  <text class="m" x="38" y="401">~/.zshrc</text>
+  <rect class="sw2" x="38" y="412" width="8" height="8" rx="1.5"/>
+  <text class="s" x="52" y="420">rows 3–4: rc.zsh, profile rc.zsh</text>
+  <rect class="swm" x="38" y="427" width="8" height="8" rx="1.5"/>
+  <text class="s" x="52" y="435">row 5: your lines</text>
+  <line class="arrow" x1="220" y1="444" x2="220" y2="462" marker-end="url(#so-ah)"/>
+
+  <rect class="b3d" x="24" y="466" width="392" height="64" rx="7"/>
+  <text class="ts" x="38" y="487">first prompt</text>
+  <rect class="sw3" x="38" y="498" width="8" height="8" rx="1.5"/>
+  <text class="s" x="52" y="506">row 6: _df_load_last plugins</text>
+  <text class="s" x="52" y="521">then the hook removes itself</text>
+
+  <!-- Lane 2: bash -->
+  <text class="lane" x="464" y="36">bash, login and interactive</text>
+  <text class="s" x="464" y="54">for example, bash -l in a terminal</text>
+
+  <rect class="sys" x="464" y="72" width="392" height="46" rx="7"/>
+  <text class="ts" x="478" y="93">system profile</text>
+  <text class="s" x="478" y="109">macOS: path_helper</text>
+  <line class="arrow" x1="660" y1="118" x2="660" y2="136" marker-end="url(#so-ah)"/>
+
+  <rect class="box" x="464" y="140" width="392" height="46" rx="7"/>
+  <text class="m" x="478" y="161">~/.bash_profile</text>
+  <text class="s" x="478" y="177">its block only: sources ~/.profile, then ~/.bashrc</text>
+  <line class="arrow" x1="660" y1="186" x2="660" y2="204" marker-end="url(#so-ah)"/>
+
+  <rect class="box" x="488" y="208" width="368" height="64" rx="7"/>
+  <text class="m" x="502" y="229">~/.profile</text>
+  <rect class="sw1" x="502" y="240" width="8" height="8" rx="1.5"/>
+  <text class="s" x="516" y="248">rows 1–2: env.sh, profile env.sh</text>
+  <rect class="swm" x="502" y="255" width="8" height="8" rx="1.5"/>
+  <text class="s" x="516" y="263">your lines</text>
+  <line class="arrow" x1="672" y1="272" x2="672" y2="290" marker-end="url(#so-ah)"/>
+
+  <rect class="box" x="488" y="294" width="368" height="80" rx="7"/>
+  <text class="m" x="502" y="315">~/.bashrc</text>
+  <text class="lab" x="842" y="315" text-anchor="end">if interactive</text>
+  <rect class="sw1" x="502" y="326" width="8" height="8" rx="1.5"/>
+  <text class="s" x="516" y="334">rows 1–2 again</text>
+  <rect class="sw2" x="502" y="341" width="8" height="8" rx="1.5"/>
+  <text class="s" x="516" y="349">rows 3–4: rc.bash, profile rc.bash</text>
+  <rect class="swm" x="502" y="356" width="8" height="8" rx="1.5"/>
+  <text class="s" x="516" y="364">row 5: your lines</text>
+  <line class="arrow" x1="660" y1="374" x2="660" y2="392" marker-end="url(#so-ah)"/>
+
+  <rect class="box" x="464" y="396" width="392" height="46" rx="7"/>
+  <text class="m" x="478" y="417">~/.bash_profile</text>
+  <text class="s" x="478" y="433">after its block: your lines, last</text>
+
+  <line class="arrow" x1="472" y1="190" x2="472" y2="392" stroke-dasharray="2 3"/>
+  <text class="lab" x="478" y="470">bash has no load-last step</text>
+
+  <!-- Legend -->
+  <g transform="translate(24 572)">
+    <rect class="sw1" x="0" y="0" width="12" height="12" rx="2"/><text class="s" x="18" y="10">Environment (rows 1–2)</text>
+    <rect class="sw2" x="170" y="0" width="12" height="12" rx="2"/><text class="s" x="188" y="10">Interactive (rows 3–4)</text>
+    <rect class="swm" x="340" y="0.5" width="11" height="11" rx="2"/><text class="s" x="358" y="10">Your lines (row 5)</text>
+    <rect class="sw3" x="480" y="0" width="12" height="12" rx="2"/><text class="s" x="498" y="10">Load-last (row 6)</text>
+    <rect class="sws" x="620" y="0.5" width="11" height="11" rx="2"/><text class="s" x="638" y="10">System file, not managed</text>
+    <text class="s" x="0" y="44">Row numbers refer to the layer stack. Login shells load the environment twice; that's harmless, because it's idempotent.</text>
+  </g>
+</svg>

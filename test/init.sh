@@ -1,9 +1,23 @@
 #!/bin/sh
-# test/init.sh: behavior of `dotfiles init` on scratch home directories.
+# test/init.sh
+#
+# Checks `dotfiles init`, which writes the dotfiles block at the top of each
+# shell entry file: ~/.profile, ~/.bash_profile, ~/.bashrc, ~/.zshenv,
+# ~/.zprofile and ~/.zshrc. The checks follow the injection rules in the
+# spec. They cover what init creates, what it must keep of a file's existing
+# content, and when it must refuse to change a file. Those files hold
+# people's own shell setup, so most of the checks are about leaving that
+# content alone.
+#
+# Each case runs init in a new scratch home directory with its own copy of
+# the repo (see test/lib.sh). Run it alone with `sh test/init.sh`.
 SUITE=init
 . "$(dirname "$0")/lib.sh"
 
-# Empty home: every entry file is created; a second run changes nothing.
+# On an empty home, init creates all six entry files and the cache
+# directory. The repo is in the default place, so the block refers to it as
+# $HOME/.dotfiles. Running init a second time must change nothing, so it is
+# always safe to run again, and it reports each unchanged file as ok.
 fresh
 check "succeeds on empty home" run_init
 check "creates all six entry files" test -f "$H/.profile" -a -f "$H/.bash_profile" \
@@ -16,7 +30,14 @@ snapshot >"$root/after"
 check "is idempotent" cmp -s "$root/before" "$root/after"
 check "reports unchanged files as ok" test "$(grep -cE '^ok +.*/\.(profile|bash_profile|bashrc|zshenv|zprofile|zshrc)$' "$root/out")" -eq 6
 
-# Existing content stays below the block, separated by one blank line.
+# A file's existing content must survive. The block goes above it with one
+# blank line between them, and running init again must not add another blank
+# line each time.
+#
+# The expected end of the file is a heredoc on file descriptor 3, which the
+# inner sh reads as /dev/fd/3. In `sh -c '...' _ FILE /dev/fd/3`, the two
+# paths become $1 and $2. The _ is a placeholder, because sh -c assigns the
+# first argument after the script to $0.
 fresh
 printf 'export FOO=1\nalias x=y\n' >"$H/.zshrc"
 run_init
@@ -29,14 +50,18 @@ X
 run_init
 check "does not add a second blank line" test "$(grep -c '^$' "$H/.zshrc")" -eq 1
 
-# Shebang stays on line 1.
+# A shebang only works on the first line, so it must stay there, and the
+# block goes right after it.
 fresh
 printf '#!/bin/zsh\necho hi\n' >"$H/.zshrc"
 run_init
 check "keeps shebang first" test "$(first_line "$H/.zshrc")" = '#!/bin/zsh'
 check "block follows shebang" sh -c 'sed -n 2p "$1" | grep -q "^# >>> dotfiles "' _ "$H/.zshrc"
 
-# Stale, duplicated and misplaced blocks collapse into one current block at the top.
+# A file can hold blocks from an older version, more than one block, or a
+# block below other content. init removes all of them and writes one current
+# block at the top, with the new repo path. The content between the old
+# blocks stays, in its original order.
 fresh
 cat >"$H/.bashrc" <<'X'
 # >>> dotfiles v0 >>> old
@@ -54,7 +79,10 @@ check "upgrades block version" grep -q '^# >>> dotfiles v2 ' "$H/.bashrc"
 check "replaces old repo path" sh -c '! grep -q /old/path "$1"' _ "$H/.bashrc"
 check "keeps content order" sh -c 'grep "^echo" "$1" | tr "\n" " " | grep -qx "echo one echo two "' _ "$H/.bashrc"
 
-# An unterminated block is an error and the file is left untouched.
+# A block with an opening marker but no closing one. init can't tell where
+# the block ends, so removing it could delete the user's own lines. It must
+# leave the file untouched and exit non-zero, but still set up the other
+# entry files.
 fresh
 printf '# >>> dotfiles v1 >>>\necho keep me\n' >"$H/.zshrc"
 cp "$H/.zshrc" "$root/orig"
@@ -62,7 +90,14 @@ check "fails on unterminated block" fails run_init
 check "leaves unterminated file untouched" cmp -s "$H/.zshrc" "$root/orig"
 check "still injects other files" test -f "$H/.zshenv"
 
-# A distro skeleton is backed up and replaced by a bare block (Linux only).
+# On Linux, a new home directory starts with copies of the distro's files in
+# /etc/skel. An entry file identical to its skeleton holds nothing the user
+# wrote, so init backs it up as FILE.dist and replaces it with a bare block.
+# That matters because Ubuntu's skeleton ~/.profile sources ~/.bashrc, which
+# would load it twice in interactive bash login shells. A file that differs
+# from its skeleton must be kept as it is. The case's skeleton directory
+# stands in for /etc/skel (see fresh in test/lib.sh). The skeleton handling
+# is Linux only, so these checks are skipped on macOS.
 if [ "$(uname -s)" = Linux ]; then
   fresh
   printf '# skeleton\n[ -f ~/.bashrc ] && . ~/.bashrc\n' >"$root/skel$n/.profile"
@@ -76,7 +111,9 @@ if [ "$(uname -s)" = Linux ]; then
   check "no backup for non-skeleton file" test ! -e "$H/.bashrc.dist"
 fi
 
-# Symlinked entry files are edited through the link.
+# Some people keep their entry files elsewhere and symlink them into their
+# home directory. init must edit the file the link points to and leave the
+# link in place.
 fresh
 printf 'echo linked\n' >"$H/real-zshrc"
 ln -s real-zshrc "$H/.zshrc"
@@ -84,7 +121,10 @@ run_init
 check "keeps the symlink" test -L "$H/.zshrc"
 check "edits the link target" grep -q '^# >>> dotfiles ' "$H/real-zshrc"
 
-# Profiles.
+# The profile selector, ~/.config/dotfiles/host, names this machine's
+# profile. --profile writes it, and a later init without --profile must keep
+# it. A profile with no directory under hosts/ gets a warning. A name with a
+# slash is rejected, because the name is used as a directory under hosts/.
 fresh
 run_init --profile example
 check "writes selector" test "$(cat "$H/.config/dotfiles/host")" = example

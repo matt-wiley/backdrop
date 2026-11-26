@@ -1,16 +1,30 @@
 # Dotfiles system spec
 
-Nov 6, 2026 · updated Nov 25, 2026 to match the implementation · @Matt Wiley
+Nov 6, 2026 · updated Nov 25, 2026 for the two-layer design and git-only install · @Matt Wiley
 
 ## Overview and goals
 
 One repo delivers the right shell config to every shell on every machine, with each setting written once. Shell startup files stay owned by the machine; the repo injects a small block at the top of each and never manages the rest.
 
-- **Write once:** each setting lives in exactly one file, whatever the shell or OS.
-- **Right place:** environment reaches every shell; interactive config reaches only interactive shells.
+- **Write once:** each setting lives in one file, whatever the OS or machine. Interactive config is per shell, so a setting wanted in both bash and zsh is written in each rc file.
+- **One obvious place:** two questions decide where any setting goes (see Architecture).
+- **Right place:** environment reaches every shell that reads a startup file; interactive config reaches only interactive shells.
+- **Editable:** every machine works from a git clone, so changes are made, versioned and shared with git.
 - **Install-proof:** installers that append to rc files never touch the repo and never conflict with it.
 - **Verifiable:** an automated matrix proves which files load in which shell, on Linux and macOS.
 - **Removable:** `dotfiles uninstall` removes the blocks and generated files; machine content stays.
+
+## Why it's built this way
+
+**Why an environment layer at all.** Exported variables pass from a process to everything it starts, so a script run from a configured terminal already has the terminal's `PATH`. The env layer exists for shells that don't start from one: `ssh host cmd`, editors and coding agents launched from the Dock or a launcher that run `zsh -c`, and on Linux the desktop session and its services. Those shells read only `~/.zshenv`, `~/.bashrc` or `~/.profile`, so `PATH` and exports go in one POSIX file that all three load. Everything else stays out of it, so those shells stay fast, silent and safe.
+
+**Why only two layers.** Where a setting goes should take no lookup. Two questions decide it: would a script need it (env, otherwise the shell's rc file), and is it for every machine or one profile (the shared file, or the same-named file in `hosts/<profile>/`). An earlier design also had a shared interactive layer for bash and zsh (`sh/interactive.sh`), separate OS files (`sh/os/*.sh`) and a separate `zsh/load-last.zsh`. Together with the profile copies, that made ten possible places for an edit. They were folded into `env.sh` and the rc files; the cost is that an alias wanted in both shells is written twice.
+
+**Why injected blocks instead of managed rc files.** Installers append to `~/.zshrc` and `~/.bashrc`, and some settings belong to one machine only. A block at the top of each startup file loads the repo and leaves everything below it to the machine, so installers never conflict with the repo, local lines stay local, and `uninstall` removes exactly what `init` added.
+
+**Why profiles are chosen, not detected.** A machine names its profile in an unversioned selector file. Hostnames change with the network on macOS, and several machines can share one profile.
+
+**Why a git clone only.** The config is meant to be edited and versioned on the machine that uses it. An earlier design shipped versioned ZIP releases with a curl-piped `install.sh`; every upgrade replaced the files and dropped local edits, so it was removed.
 
 ## The four axes
 
@@ -20,27 +34,40 @@ The system must give correct results for every combination of these axes (24 in 
 | --- | --- | --- | --- |
 | OS | Linux, macOS | Tool names and paths, `path_helper`, how the desktop starts the session | Detected once in the env layer; capability checks preferred over OS checks |
 | Login | login, non-login | Which startup files the shell reads; macOS Terminal opens login shells | Every entry file gets an injected block, so both paths reach the env layer |
-| Interactivity | interactive, non-interactive | Whether rc files are read | Env is unguarded; interactive layers sit behind a `$-` guard |
+| Interactivity | interactive, non-interactive | Whether rc files are read | Env is unguarded; the rc files sit behind a `$-` guard |
 | Shell | bash, zsh, POSIX `sh` | File names, syntax, completion and option systems | The env layer is POSIX `sh`; each shell has one interactive file |
 
 ## Architecture
 
-Settings are split by one question, whether a script would need them, into two layers: environment and interactive. Environment is shared by every shell; interactive config is one file per shell. Each layer has a shared file and an optional profile file that loads right after it. Each shell entry file carries only a small injected block that routes into those layers.
+Settings are split by one question, whether a script would need them, into two layers: environment and interactive. Environment is one POSIX file shared by every shell; interactive config is one file per shell. Each layer has a shared file and an optional profile file that loads right after it, so the profile can override it. Each shell entry file carries only a small injected block that routes into the layers.
+
+The full stack, in load order, for an interactive shell. Each row can add to or override the rows above it:
 
 ```
-entry file          block loads                                   layer
-~/.profile      ─┐
-~/.zshenv       ─┤
-~/.zprofile     ─┼─> sh/env.sh, host env.sh                       env, every shell
-~/.bashrc       ─┘
-~/.bashrc  (if interactive) ─> bash/rc.bash, host rc.bash         interactive bash
-~/.zshrc                    ─> zsh/rc.zsh, host rc.zsh            interactive zsh
-~/.bash_profile ─> ~/.profile, then ~/.bashrc if interactive
+order  file                                        layer          loaded in
+1      sh/env.sh                                   environment    every shell that reads a startup file
+2      hosts/<profile>/env.sh                      environment
+       ───────────────── non-interactive shells stop here ─────────────────
+3      zsh/rc.zsh | bash/rc.bash                   interactive    interactive zsh | interactive bash
+4      hosts/<profile>/rc.zsh | rc.bash            interactive
+5      lines below the block in ~/.zshrc | ~/.bashrc              that machine only, unversioned
+6      plugins in _df_load_last                    deferred       interactive zsh, at the first prompt
 ```
 
-Every shell path reaches the env layer; only interactive shells reach their rc file. `~/.bash_profile` reaches the layers through `~/.profile` and `~/.bashrc`.
+Which startup files a shell reads decides which rows it gets:
 
-An earlier design had a third, shared interactive layer (`sh/interactive.sh`), separate OS files (`sh/os/*.sh`) and a separate `zsh/load-last.zsh`. They were folded in because ten possible places for an edit made it hard to know where one belonged; the cost is that an alias wanted in both bash and zsh is written in both rc files.
+| Shell start | Reads | Rows |
+| --- | --- | --- |
+| Any zsh, including `zsh -c`, zsh scripts and `ssh host cmd` | `~/.zshenv` | 1–2 |
+| zsh login | `~/.zshenv`, `~/.zprofile` | 1–2, twice |
+| Interactive zsh | `~/.zshenv`, `~/.zshrc` | 1–6 |
+| Interactive bash | `~/.bashrc` | 1–5 |
+| bash login | `~/.bash_profile` → `~/.profile`, then `~/.bashrc` if interactive | 1–2; 1–5 if interactive |
+| `ssh host cmd` on a bash host | `~/.bashrc` | 1–2 |
+| `sh` login, Linux desktop login | `~/.profile` | 1–2 |
+| `bash -c`, `sh -c`, `bash script.sh` | nothing | none; inherits the parent's exports |
+
+The user guide draws both as diagrams: `docs/user/layer-stack.svg` and `docs/user/startup-order.svg`.
 
 ## Repository layout
 
@@ -68,8 +95,13 @@ dotfiles/
     init.sh uninstall.sh doctor.sh sync-env.sh install.sh   # CLI suites
     faults.sh               # broken layers must be caught
     lib.sh                  # helpers shared by the CLI suites
+  docs/
+    user/                   # getting started, editing the layers, and their diagrams
+    developer/specs/        # this spec
   .github/workflows/test.yml      # tests on every push and pull request
   .gitignore                # keeps host secrets files out of the repo
+  Dockerfile, docker-compose.yml  # Ubuntu dev container for trying changes on Linux
+  README.md
 ```
 
 All paths inside the repo are resolved from `DOTFILES_DIR`, which each injected block sets. `init` resolves the repo's own location, following symlinks to `bin/dotfiles`, and writes it into every block: as `$HOME/...` when the repo is inside the home directory, otherwise as an absolute path. The default clone path is `~/.dotfiles`. Moving the repo means re-running `init`; `doctor` warns when a block points somewhere else.
@@ -134,7 +166,7 @@ autoload -Uz add-zsh-hook
 add-zsh-hook precmd _dotfiles_load_last
 ```
 
-**bash:** the same pattern with a self-removing entry in `PROMPT_COMMAND`, used only if a bash tool needs it.
+**bash:** no load-last step. If a bash tool ever needs one, the same pattern works with a self-removing entry in `PROMPT_COMMAND`.
 
 Deferred items never run in non-interactive shells, which is the intended behavior.
 
@@ -147,12 +179,13 @@ Per-machine settings that should be versioned live in `hosts/<profile>/`, and ea
 - **Sharing:** several machines may name the same profile.
 - **Files:** `env.sh`, `rc.bash`, `rc.zsh`, each optional. Each is sourced right after the shared file of the same layer, so it can override it.
 - **No profile:** if the selector is missing or names no directory, host files are skipped silently.
+- **Completion limit:** a profile's `rc.zsh` loads after `compinit` has run in `zsh/rc.zsh`, so completion functions must be added to `fpath` in `zsh/rc.zsh`, above its completion section. Moving `compinit` later would lose its cached startup, so this is accepted.
 - **Unversioned changes:** anything below the injected block in a machine's entry file stays local and unreported, except through `doctor`.
 - **Secrets:** never in `hosts/`. Keep them below the block, or in a gitignored file the host layer sources; `.gitignore` already excludes `hosts/*/*.local.sh` and `hosts/*/secrets*`.
 
 ## Layer authoring rules
 
-The env layer must be safe to run anywhere, any number of times; the interactive layers may be richer but never run outside a prompt.
+The env layer must be safe to run anywhere, any number of times; the interactive layer may be richer but never runs outside a prompt.
 
 **Env layer (`env.sh`, host `env.sh`)**
 
@@ -162,10 +195,9 @@ The env layer must be safe to run anywhere, any number of times; the interactive
 - Fast: no `eval` of tool init, no subprocesses beyond `uname` (cached in the exported `DOTFILES_OS`).
 - Exports only: variables and `PATH`; no aliases or shell options. The only functions are the `lib.sh` helpers, prefixed `_df_`.
 - Version managers through shims (mise or similar), never by sourcing nvm.
+- OS differences sit in one `case $DOTFILES_OS` at the start of the `PATH` section. `PATH` prepends run from lowest to highest priority, so the OS directories (Homebrew) end up behind mise's shims and `~/.local/bin`, and a profile's entries end up in front of all of them.
 
-- OS differences sit in one `case $DOTFILES_OS` near the top of the `PATH` section, so OS directories land behind the repo's own.
-
-**Interactive layer (`rc.bash`, `rc.zsh`, host files)**
+**Interactive layer (`rc.zsh`, `rc.bash`, host files)**
 
 - Everything a script doesn't need: aliases, functions, options, completion, keybinds, prompt, tool init and plugins. Each file uses its shell's full syntax.
 - Guarded on `$-` containing `i`.
@@ -232,7 +264,7 @@ A trace mode plus a matrix script prove which files load in each shell, and CLI 
 
 **Trace mode:** with `DOTFILES_TRACE=1`, every repo file appends its name to stderr as it loads. Off by default; a single variable test per file when off.
 
-**Matrix:** `test/matrix.sh` runs each invocation under `env -i` in a scratch `HOME` with blocks injected by `init`, with a probe command (`echo @df@ran`). It captures stdout, stderr and the trace, and asserts the expected layers and `PATH` entries. It loads a host profile too: `DOTFILES_TEST_PROFILE`, which `dotfiles test` sets to this machine's profile, or `example`. If `init` fails but writes the blocks (as when `sync-env` meets a broken env layer), the matrix records the failure and still tests every shell.
+**Matrix:** `test/matrix.sh` runs each invocation under `env -i` in a scratch `HOME` with blocks injected by `init`, with a probe command (`echo @df@ran`). It captures stdout, stderr and the trace, and asserts the expected layers. It loads a host profile too: `DOTFILES_TEST_PROFILE`, which `dotfiles test` sets to this machine's profile, or `example`. If `init` fails but writes the blocks (as when `sync-env` meets a broken env layer), the matrix records the failure and still tests every shell.
 
 | Invocation | Expected layers |
 | --- | --- |
@@ -247,7 +279,7 @@ A trace mode plus a matrix script prove which files load in each shell, and CLI 
 | `zsh -ic` | env, zsh |
 | `zsh -lic` | env (twice, idempotent), zsh |
 
-**Extra assertions**
+**Extra assertions** (Implementation status lists the ones not built yet)
 
 - `PATH` has no duplicates and the repo's entries come before system ones, on macOS too.
 - The probe command runs in every invocation, so no layer exits or stops the shell.
@@ -282,15 +314,18 @@ A trace mode plus a matrix script prove which files load in each shell, and CLI 
 | GUI environment, macOS | Not supported in v1; `launchctl setenv` with a LaunchAgent is the escape hatch | — |
 | Tool installation | Separate `install` command with `packages.toml`; runtimes through a `mise` key | CLI |
 | Repo location | Any path; `init` writes it into the blocks; default `~/.dotfiles` | Repository layout |
-| Installing without git | Not supported: the repo is meant to be edited and versioned, so every machine uses a git clone. An earlier design shipped versioned ZIP releases with a curl-piped `install.sh`; they were removed because upgrades overwrote local edits | Repository layout |
+| Installing without git | Not supported; every machine uses a git clone | Why it's built this way |
 | Agent shells (Claude Code snapshot) | No aliases that shadow commands, plus an agent guard | Layer authoring rules |
+| Number of layers | Two, environment and interactive, each with a profile file; no shared bash-and-zsh interactive file | Why it's built this way |
+| OS-specific settings | A `case` in `env.sh`, not separate files | Layer authoring rules |
+| Plugins that must load last | A `_df_load_last` list in `rc.zsh` that profiles can extend, not a separate file | Load-last handling |
 
 ## Implementation status
 
 Everything above is implemented except:
 
 - **Caches:** tool init output for starship, zoxide and fzf is not generated or cached; `init` only creates the cache directory.
-- **Interactive layer:** `_df_load_last` lists no plugins yet; `rc.bash` and `rc.zsh` have no completion setup beyond `compinit`, prompt or keybinds; the agent-only sections of the rc files are empty, and `install` does not verify `CLAUDECODE`.
+- **Interactive layer:** `_df_load_last` lists no plugins yet (the entries in `rc.zsh` are commented out); `rc.bash` and `rc.zsh` have no completion setup beyond `compinit`, prompt or keybinds; the agent-only sections of the rc files are empty, and `install` does not verify `CLAUDECODE`.
 - **Testing:**
   - The matrix asserts layers but not `PATH` entries.
   - Not implemented: the `PATH` duplicate and order assertion, the missing-repo assertion, the `hyperfine` startup budget and its CI thresholds.
