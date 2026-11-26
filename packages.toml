@@ -57,22 +57,22 @@ bin = "rg"
 required = true
 brew = "ripgrep"
 apt = "ripgrep"
-dnf = "ripgrep"
-pacman = "ripgrep"
+# dnf = "ripgrep"
+# pacman = "ripgrep"
 
 [fd]
 bin = ["fd", "fdfind"]
 required = true
 brew = "fd"
 apt = "fd-find"
-dnf = "fd-find"
-pacman = "fd"
+# dnf = "fd-find"
+# pacman = "fd"
 
 [fzf]
 brew = "fzf"
 apt = "fzf"
-dnf = "fzf"
-pacman = "fzf"
+# dnf = "fzf"
+# pacman = "fzf"
 
 [mise]
 brew = "mise"
