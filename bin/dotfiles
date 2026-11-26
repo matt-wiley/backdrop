@@ -1,8 +1,33 @@
 #!/bin/sh
-# dotfiles: manage injected shell blocks. See docs/user/01-getting-started.md and docs/developer/specs/dotfiles-system-spec.md.
+# bin/dotfiles
+#
+# The command-line tool for this repo. It injects a small block at the top of
+# each shell startup file (~/.profile, ~/.bashrc, ~/.zshrc and the rest), so
+# that every shell loads the repo's layers, and it can remove those blocks
+# again. It also checks the setup (doctor), installs the tools listed in
+# packages.toml (install), writes the systemd login environment on Linux
+# (sync-env) and runs the test suites (test).
+#
+# It is a single POSIX sh script on purpose. It has to work on a fresh machine
+# where nothing has been installed yet, on both macOS and Linux, so it can't
+# depend on bash features, a particular bash version, or tools beyond the
+# basics every system ships (awk, sed, grep, cmp). Where macOS's BSD tools
+# and Linux's GNU tools behave differently, it uses only what both support.
+#
+# For how to use it, see docs/user/01-getting-started.md. For why it works the
+# way it does, see docs/developer/specs/dotfiles-system-spec.md.
+
+# Stop at the first command that fails (-e), and treat a reference to an unset
+# variable as an error (-u) instead of silently expanding it to nothing.
 set -eu
 
-# Resolve the repo through any symlink to this script (e.g. ~/.local/bin/dotfiles).
+# Find the repo, which is the parent of the directory this script is in. The
+# script is often run through a symlink, such as ~/.local/bin/dotfiles, so
+# follow the link chain to the real file first. This uses plain readlink in a
+# loop rather than `readlink -f`, because older macOS versions don't have -f.
+# A relative link target is relative to the link's own directory, so it's
+# joined to that directory. `pwd -P` then resolves any symlinked directories
+# in the path, so DOTFILES_DIR is always the real, physical path.
 self=$0
 while [ -L "$self" ]; do
   link=$(readlink "$self")
@@ -14,23 +39,43 @@ done
 DOTFILES_DIR=$(cd "$(dirname "$self")/.." && pwd -P)
 export DOTFILES_DIR
 
+# The OS decides a few behaviors: distro skeletons and sync-env exist only on
+# Linux, and install looks for Homebrew only on macOS. Anything that isn't
+# macOS is treated as Linux.
 case $(uname -s) in
   Darwin) DOTFILES_OS=darwin ;;
   *) DOTFILES_OS=linux ;;
 esac
 
+# SELECTOR is the unversioned file that names this machine's profile. It sits
+# outside the repo because each machine picks its own, and several machines
+# can share one profile.
 SELECTOR=$HOME/.config/dotfiles/host
 CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles
+# Linux distributions copy the files in /etc/skel into each new home
+# directory. The tests point DOTFILES_SKEL_DIR at a directory of their own.
 SKEL_DIR=${DOTFILES_SKEL_DIR:-/etc/skel} # overridable for tests
 
-# template:target pairs, one per shell entry file.
+# The shell startup files the tool manages. Each entry is TEMPLATE:TARGET,
+# where TEMPLATE names blocks/TEMPLATE.sh and TARGET is the file in $HOME.
+# POSIX sh has no arrays, so this is a space-separated string. Code that loops
+# over it splits each pair with ${pair%%:*} (the part before the colon) and
+# ${pair#*:} (the part after it).
 ENTRY_FILES='profile:.profile bash_profile:.bash_profile bashrc:.bashrc zshenv:.zshenv zprofile:.zprofile zshrc:.zshrc'
 
+# Commands that need scratch files create a temporary directory in TMP, and
+# the EXIT trap removes it however the script ends. Some shells, such as dash,
+# don't run the EXIT trap when killed by a signal, so the second trap turns
+# Ctrl-C or a TERM into a normal exit, which does run it. 130 is the usual
+# exit status for a command stopped by Ctrl-C.
 TMP=
 cleanup() { [ -z "$TMP" ] || rm -rf "$TMP"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
+# Output helpers. say prints to stdout; warn and err print to stderr with a
+# "dotfiles:" prefix, so their messages stand out when mixed with other
+# output; die prints an error and exits.
 say() { printf '%s\n' "$*"; }
 warn() { printf 'dotfiles: warning: %s\n' "$*" >&2; }
 err() { printf 'dotfiles: %s\n' "$*" >&2; }
@@ -53,8 +98,23 @@ USAGE
 
 # --- init -------------------------------------------------------------------
 
-# The repo path as written into blocks: relative to $HOME when it lives there,
-# so the block survives a renamed home directory.
+# block_dir
+#
+# Prints the repo path in the form init writes into each block's
+# DOTFILES_DIR="..." line.
+#
+# - When the repo is inside your home directory, the path is written as
+#   $HOME/..., with a literal $HOME that the shell expands at startup. The
+#   block then keeps working if the home directory is renamed or moved.
+# - The path goes between double quotes in the block, so a path containing ",
+#   \, ` or $ would break the block or be expanded by the shell. Such a path
+#   is refused rather than escaped, since a broken block would affect every
+#   new shell.
+# - $HOME is resolved with `pwd -P` before comparing, because DOTFILES_DIR is
+#   a physical path. If $HOME went through a symlink, the two paths would
+#   otherwise never match.
+# - In ${DOTFILES_DIR#"$home_real"/}, the quotes make the shell match the home
+#   path literally instead of treating characters like * in it as a pattern.
 block_dir() {
   case $DOTFILES_DIR in
     *'"'* | *'\'* | *'`'* | *'$'*)
@@ -68,7 +128,15 @@ block_dir() {
   esac
 }
 
-# render_block TEMPLATE DIR: print the template with @DOTFILES_DIR@ replaced.
+# render_block TEMPLATE DIR
+#
+# Prints the block template TEMPLATE with @DOTFILES_DIR@ replaced by DIR.
+#
+# It splices the text together with index() and substr() rather than using
+# awk's sub(), because sub() gives & and \ in the replacement a special
+# meaning, which would corrupt a path containing them. 14 is the length of
+# "@DOTFILES_DIR@". Only the first placeholder on each line is replaced, which
+# is all the templates use.
 render_block() {
   awk -v dir="$2" '{
     i = index($0, "@DOTFILES_DIR@")
@@ -77,11 +145,25 @@ render_block() {
   }' "$1"
 }
 
-# splice BLOCKFILE SOURCE: print SOURCE with every existing dotfiles block
-# removed (see strip) and BLOCKFILE placed first, after a shebang if any, then
-# one blank line before the machine content. strip removes that same blank
-# line, so init is idempotent and uninstall restores the file exactly.
-# Exits 3 if SOURCE has an unterminated or nested block.
+# splice BLOCKFILE SOURCE
+#
+# Prints the new content for an entry file: SOURCE with every existing
+# dotfiles block removed, and the block in BLOCKFILE placed at the top.
+#
+# - Old blocks are removed wherever they are, so a block that was moved, or
+#   duplicated by hand, ends up as one current block at the top.
+# - A shebang line stays on line 1, ahead of the block, because a #! line
+#   only has an effect as the first line of a file.
+# - One blank line separates the block from the machine's own content. strip
+#   removes exactly that line again, so running init twice changes nothing
+#   and uninstall restores the original file byte for byte.
+# - It returns status 3, passed on from strip, if SOURCE has an unterminated
+#   or nested block. The caller then leaves the file alone, because there's
+#   no safe way to tell where the block was meant to end.
+#
+# The awk program reads the whole block file in its BEGIN section with
+# getline, before reading SOURCE, and holds SOURCE's lines until END so that
+# it can print the shebang and the block ahead of them.
 splice() {
   strip "$2" >"$TMP/stripped" || return
   awk -v blockfile="$1" '
@@ -95,12 +177,19 @@ splice() {
     }' "$TMP/stripped"
 }
 
-# inject_file TEMPLATE TARGET DIR: returns non-zero if TARGET was left alone
-# because of a problem.
+# inject_file TEMPLATE TARGET DIR
+#
+# Writes the current block, rendered with repo path DIR, at the top of the
+# entry file TARGET, creating the file if it doesn't exist. It returns
+# non-zero if a problem made it leave TARGET alone, so init can count the
+# skipped files and exit with an error.
 inject_file() {
   tmpl=$1 target=$2 name=${2##*/}
   render_block "$tmpl" "$3" >"$TMP/block"
 
+  # A symlink whose target is missing is skipped rather than written through,
+  # because writing through it would create a file in whatever place the
+  # link points to. -e follows the link, so it's false for a broken link.
   if [ -L "$target" ] && [ ! -e "$target" ]; then
     err "$target is a broken symlink; skipped"
     return 1
@@ -115,6 +204,13 @@ inject_file() {
     return 1
   fi
 
+  # On Linux, a home directory starts with copies of the distro's skeleton
+  # files from /etc/skel. If this file is still an untouched copy, and has no
+  # block yet, it's backed up to TARGET.dist and replaced by the block alone,
+  # rather than kept below the block. Keeping it would cause trouble: Ubuntu's
+  # skeleton .profile, for example, sources .bashrc, which would then load
+  # twice in an interactive bash login shell. An existing .dist backup is
+  # never overwritten. Reading from /dev/null gives splice an empty file.
   source=$target
   if ! grep -q '^# >>> dotfiles ' "$target" && [ "$DOTFILES_OS" = linux ] &&
     [ -f "$SKEL_DIR/$name" ] && cmp -s "$target" "$SKEL_DIR/$name"; then
@@ -123,6 +219,8 @@ inject_file() {
     source=/dev/null
   fi
 
+  # `|| status=$?` records splice's exit status without set -e ending the
+  # script, so the failure can be reported and the remaining files handled.
   status=0
   splice "$TMP/block" "$source" >"$TMP/new" || status=$?
   if [ "$status" -eq 3 ]; then
@@ -133,17 +231,29 @@ inject_file() {
     return 1
   fi
 
+  # If nothing would change, the file isn't written at all, so its
+  # modification time stays the same.
   if cmp -s "$TMP/new" "$target"; then
     say "ok       $target"
     return 0
   fi
   [ ! -L "$target" ] || warn "$target is a symlink; editing the file it points to"
-  # Write in place: keeps permissions, ownership and symlinks.
+  # Overwrite the existing file's contents instead of moving a new file into
+  # place. That keeps the file's permissions and owner, and if TARGET is a
+  # symlink, the link stays and the file it points to is updated.
   cat "$TMP/new" >"$target"
   say "updated  $target"
 }
 
 # write_selector NAME
+#
+# Saves NAME as this machine's profile in the selector file.
+#
+# The name becomes part of a path, hosts/NAME, so names that would point
+# outside hosts/ (., .., or anything containing /) are refused, and so are
+# names starting with -, which would look like an option. A name with no
+# hosts/NAME directory is allowed, with a warning, because the blocks skip
+# missing host files silently; the directory can be added later.
 write_selector() {
   case $1 in
     '' | . | .. | */* | -*) die "invalid profile name: '$1'" ;;
@@ -155,17 +265,45 @@ write_selector() {
   say "profile  $1 (written to $SELECTOR)"
 }
 
+# read_profile
+#
+# Prints the profile named in the selector file, or nothing if there's none.
+#
+# read fails if the file is empty or its last line has no newline (though it
+# still sets the variable in that second case). `|| :` makes the line succeed
+# anyway, so set -e doesn't end the script; `:` is the shell's do-nothing
+# command.
 read_profile() {
   profile=
   [ -r "$SELECTOR" ] && read -r profile <"$SELECTOR" || :
   printf '%s' "$profile"
 }
 
-# list_tools MANAGER FILE...: print one tab-separated line per tool in the
-# packages.toml files: name, required (1/0), commands, MANAGER's package and
-# mise spec, with "-" for an empty field. A table in a later file replaces
-# the same tool's table from an earlier one. Commands come from the `bin`
-# key, defaulting to the tool's name.
+# list_tools MANAGER FILE...
+#
+# Reads the packages.toml files and prints one tab-separated line per tool,
+# with these fields: the tool's name, 1 or 0 for whether it's required, the
+# commands that count as installed, its package name for MANAGER, and its
+# mise spec.
+#
+# - A table in a later file replaces the table of the same name in an earlier
+#   one. That's how a profile's packages.toml overrides the shared list. The
+#   tool keeps its position from the first file.
+# - The commands come from the tool's `bin` key, and default to the tool's
+#   name.
+# - An empty field is printed as "-". The callers read these lines with
+#   IFS set to a tab, and because a tab counts as whitespace to `read`, two
+#   tabs in a row would be treated as one and shift the remaining fields.
+#
+# This isn't a full TOML parser, since no TOML tool can be assumed on a fresh
+# machine. It understands what packages.toml uses: [name] table headers, and
+# key = value lines with a quoted string or true/false, optionally followed by
+# a # comment. In the header rule, the bracket expression [][[:space:]]
+# matches ], [ or whitespace (a ] placed first in the brackets is taken
+# literally), so gsub() strips "[ fd ]" down to "fd".
+#
+# The variable is named pm_ because POSIX sh has no local variables, and
+# cmd_install, which calls this through tools_for, already uses pm.
 list_tools() {
   pm_=$1
   shift
@@ -199,7 +337,12 @@ list_tools() {
     }' "$@"
 }
 
-# tools_for MANAGER: list_tools over the shared and the profile's packages.toml.
+# tools_for MANAGER
+#
+# Runs list_tools over the shared packages.toml, followed by the selected
+# profile's packages.toml if it has one, so the profile's tables win. The
+# file list is built in the positional parameters with `set --`, which is the
+# only list POSIX sh has, so paths with spaces stay intact.
 tools_for() {
   tpm=$1
   set -- "$DOTFILES_DIR/packages.toml"
@@ -210,7 +353,11 @@ tools_for() {
   list_tools "$tpm" "$@"
 }
 
-# has_any "CMD [CMD...]": true if any of the commands is on PATH.
+# has_any "COMMAND..."
+#
+# Succeeds if any of the space-separated commands can be run. A tool counts
+# as installed under any of its names, such as fd or fdfind. $1 is left
+# unquoted in the loop on purpose, so the shell splits it into words.
 has_any() {
   for b in $1; do
     if command -v "$b" >/dev/null 2>&1; then return 0; fi
@@ -218,8 +365,15 @@ has_any() {
   return 1
 }
 
-# missing_tools all|required: print the names of tools that aren't on PATH,
-# space-separated.
+# missing_tools all|required
+#
+# Prints the space-separated names of the tools that aren't installed: all of
+# them, or only those marked required.
+#
+# It passes "-" as the manager because only the names and commands are
+# needed here, not package names. The loop runs in a pipeline, which is a
+# subshell, so its results are collected as output with $(...) rather than in
+# a variable. ${missing% } then drops the trailing space.
 missing_tools() {
   mode=$1
   missing=$(tools_for - | while IFS='	' read -r tool req bins _pkg _mise; do
@@ -229,11 +383,22 @@ missing_tools() {
   printf '%s' "${missing% }"
 }
 
+# Prints one line listing the tools that aren't installed, if there are any.
 report_missing_tools() {
   missing=$(missing_tools all)
   [ -z "$missing" ] || say "missing  $missing (see \`dotfiles install\`)"
 }
 
+# cmd_init [--profile NAME]
+#
+# Injects or upgrades the block in every entry file, saves the profile if one
+# is given, creates the cache directory and, on Linux, runs sync-env.
+#
+# - It reports missing tools but never installs them. Installing is left to
+#   `dotfiles install`, the only command that runs package managers or sudo.
+# - It handles every entry file even if one fails, then exits non-zero if any
+#   file was skipped or sync-env failed, so a script running init can tell
+#   the setup is incomplete.
 cmd_init() {
   profile_arg=
   while [ $# -gt 0 ]; do
@@ -261,7 +426,10 @@ cmd_init() {
     inject_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$HOME/${pair#*:}" "$dir" ||
       failed=$((failed + 1))
   done
-  # A new ~/.bash_profile hides ~/.bash_login from bash login shells.
+  # A bash login shell reads only the first of ~/.bash_profile, ~/.bash_login
+  # and ~/.profile that exists. Once init has created ~/.bash_profile, bash
+  # stops reading ~/.bash_login, so anything in it would silently stop
+  # working.
   [ ! -e "$HOME/.bash_login" ] ||
     warn "$HOME/.bash_login is no longer read by bash; move its content below the block in ~/.bash_profile"
 
@@ -277,21 +445,52 @@ cmd_init() {
   if [ "$failed" -gt 0 ]; then
     err "$failed entry file(s) skipped"
   fi
+  # The status of this last test becomes init's exit status.
   [ "$failed" -eq 0 ] && [ "$env_failed" -eq 0 ]
 }
 
 # --- sync-env ---------------------------------------------------------------
 
+# On Linux, the desktop session and the services systemd starts for you don't
+# come from a shell, so they never read ~/.profile. systemd builds their
+# environment from the files in ~/.config/environment.d instead. sync-env
+# writes one of those files with what the env layer exports, so graphical
+# apps get the same PATH and variables as your shells.
+
 # The PATH a systemd user session starts with, before environment.d applies.
+# sync-env runs the env layer starting from this PATH, so it sees the same
+# starting point systemd does.
 BASE_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENVD_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/dotfiles.conf
 
-# env_changes BEFORE AFTER: compare two NAME=VALUE dumps and print one line
-# per variable the env layer set, tab-separated:
-#   set  NAME VALUE      write NAME=VALUE
-#   skip NAME REASON     can't be written to environment.d
-# A list variable (PATH and the like) that keeps all its old entries is
-# written as NEW:ENTRIES:${NAME}, so it extends the session's value.
+# env_changes BEFORE AFTER
+#
+# Compares two dumps of NAME=VALUE lines, taken before and after the env
+# layer ran, and prints one tab-separated line for each variable the layer
+# set or changed:
+#
+#   set   NAME  VALUE    write NAME=VALUE to the file
+#   skip  NAME  REASON   the value can't be written to environment.d
+#
+# - systemd expands $ in environment.d values even when it's escaped, so a
+#   value can only be written if it's meant literally. Values with $, \,
+#   quotes, backticks or newlines, or with whitespace at either end, are
+#   skipped with a reason rather than written wrong.
+# - A colon-separated list such as PATH that still has all of its old entries
+#   is written as NEW:ENTRIES:${NAME}. systemd replaces ${NAME} with the
+#   value the session already has, so the file adds to that value instead of
+#   replacing it. Only entries that weren't already there are written, and
+#   empty entries are dropped.
+# - PWD, OLDPWD, SHLVL and _ are ignored, because the shell sets them itself;
+#   they're not part of the env layer.
+#
+# Awk notes: FNR == NR is true only while awk reads the first file, so that
+# rule stores the BEFORE values and the other rules see only AFTER. Each line
+# is split at its first "=", since values can contain "=" too. The dump
+# encodes newlines inside values as @DFNL@, so each variable is one line. q
+# is a single quote, made with sprintf because the program itself is inside
+# single quotes in the shell. split("", arr) empties an array, which POSIX
+# awk has no direct way to do.
 env_changes() {
   awk '
     function unsafe(s) {
@@ -328,12 +527,34 @@ env_changes() {
     }' "$1" "$2"
 }
 
-# sync_env: write ENVD_FILE from what the ~/.profile block exports.
+# sync_env
+#
+# Writes ENVD_FILE from the variables the ~/.profile block exports. init calls
+# it too, on Linux, which is why it creates TMP only if the caller hasn't.
+#
+# - It runs the same block init writes into ~/.profile, rendered from the
+#   template, rather than reading env.sh directly, so the result matches what
+#   a login shell really gets, host env.sh included.
+# - The block runs under `env -i`, which starts with an empty environment,
+#   plus only HOME, USER, LOGNAME and systemd's default PATH. That's roughly
+#   what systemd starts a session with, and it keeps variables from the
+#   terminal you run this in out of the file.
+# - If the env layer fails, it returns before touching ENVD_FILE, so the
+#   previous file stays in place. If the layer prints anything, it warns,
+#   since the env layer must be silent, but still writes the file.
+# - The file is rewritten in full every time, so a variable removed from the
+#   env layer disappears from it too.
 sync_env() {
   [ -n "$TMP" ] || TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
 
-  # Run the real ~/.profile block in a clean environment, dumping the
-  # exported variables before and after it.
+  # Build a small script, the probe, that dumps the environment, runs the
+  # ~/.profile block, and dumps the environment again. The dump uses awk's
+  # ENVIRON array instead of the env command, because env prints a newline
+  # inside a value as-is, which would make a single variable look like
+  # several. awk turns each such newline into @DFNL@, and sorting with
+  # LC_ALL=C gives the same order everywhere. In the first printf, each '\''
+  # ends the single-quoted string, adds a literal quote, and starts a new
+  # one; it's how a single quote is written inside single quotes.
   {
     # shellcheck disable=SC2016
     printf '%s\n' 'dump() { awk '\''BEGIN { for (k in ENVIRON) { v = ENVIRON[k]; gsub(/\n/, "@DFNL@", v); print k "=" v } }'\'' | LC_ALL=C sort; }'
@@ -341,6 +562,9 @@ sync_env() {
     render_block "$DOTFILES_DIR/blocks/profile.sh" "$(block_dir)"
     printf '%s\n' 'dump >"$2"'
   } >"$TMP/probe"
+  # Collect the variables for `env -i` in the positional parameters. USER and
+  # LOGNAME are passed only if they're set, so an unset one isn't turned into
+  # an empty one.
   set -- HOME="$HOME" PATH="$BASE_PATH"
   [ -z "${USER-}" ] || set -- "$@" USER="$USER"
   [ -z "${LOGNAME-}" ] || set -- "$@" LOGNAME="$LOGNAME"
@@ -354,6 +578,8 @@ sync_env() {
     sed 's/^/  /' "$TMP/probe.out" >&2
   fi
 
+  # Build the new file in TMP. The read loop splits each line at tabs, and
+  # skipped variables become warnings instead of lines in the file.
   env_changes "$TMP/before" "$TMP/after" >"$TMP/changes"
   count=0
   {
@@ -367,6 +593,9 @@ sync_env() {
     done <"$TMP/changes"
   } >"$TMP/envd"
 
+  # doctor warns when env.sh is newer than this file. When the content hasn't
+  # changed, the file is touched instead of rewritten, so its timestamp still
+  # shows it was checked against the current env.sh.
   mkdir -p "${ENVD_FILE%/*}"
   if cmp -s "$TMP/envd" "$ENVD_FILE"; then
     touch "$ENVD_FILE" # mark it current for doctor
@@ -377,6 +606,11 @@ sync_env() {
   fi
 }
 
+# cmd_sync_env
+#
+# The sync-env command. It's an error on macOS, where GUI apps don't get
+# their environment from systemd or from shell startup files at all, so
+# there's nothing to write.
 cmd_sync_env() {
   case ${1-} in
     '') ;;
@@ -390,8 +624,19 @@ cmd_sync_env() {
 
 # --- uninstall --------------------------------------------------------------
 
-# strip SOURCE: print SOURCE without its dotfiles blocks. Also drops the one
-# blank line init adds after a block at the top. Exits 3 on a broken block.
+# strip SOURCE
+#
+# Prints SOURCE with every dotfiles block removed, markers included. Both
+# init (through splice) and uninstall use it.
+#
+# - It also drops the one blank line init adds after a block, but only after
+#   a block at the top of the file, where init puts it. That's what the
+#   `seen` flag tracks: whether any line has been kept yet. A blank line
+#   after a block further down belongs to the machine's content and stays.
+# - It exits with status 3 if a block is never closed or a second opening
+#   marker appears inside a block. Either way the end of the block is
+#   unknown, and guessing could delete the machine's own lines.
+# - A shebang on line 1 is kept as is.
 strip() {
   awk '
     NR == 1 && /^#!/ { print; next }
@@ -403,12 +648,18 @@ strip() {
     END { if (inblock || bad) exit 3 }' "$1"
 }
 
-# has_content FILE: true if FILE has a non-blank line other than a shebang.
+# has_content FILE
+#
+# Succeeds if FILE has any non-blank line other than a shebang. awk's exit
+# status is the reverse of `found`, because to the shell 0 means success.
 has_content() {
   awk 'NR == 1 && /^#!/ { next } /[^[:space:]]/ { found = 1; exit } END { exit !found }' "$1"
 }
 
-# uninstall_file TARGET: returns non-zero if TARGET was left alone because of a problem.
+# uninstall_file TARGET
+#
+# Removes the dotfiles block from TARGET. A file without a block is left
+# alone. It returns non-zero if a problem made it leave TARGET unchanged.
 uninstall_file() {
   target=$1
   if [ ! -f "$target" ] || ! grep -q '^# >>> dotfiles ' "$target"; then
@@ -422,6 +673,10 @@ uninstall_file() {
     return 1
   fi
 
+  # If the machine's own content remains, write it back in place, which keeps
+  # the file's permissions and any symlink. A .dist backup from init is kept,
+  # because the content now in the file and the original skeleton may both
+  # matter, and only a person can merge them.
   if has_content "$TMP/new"; then
     cat "$TMP/new" >"$target"
     say "removed  block from $target"
@@ -430,7 +685,12 @@ uninstall_file() {
     return 0
   fi
 
-  # Nothing but the block: the file was created or emptied by init.
+  # The file held nothing but the block, so init either created it or replaced
+  # a skeleton copy. Put back the skeleton from the .dist backup if there is
+  # one, and otherwise delete the file rather than leave it empty. An empty
+  # file isn't harmless: an empty ~/.bash_profile would stop bash login shells
+  # from reading ~/.profile. A symlink is the exception; it's emptied, not
+  # deleted, because the link itself was there before init.
   if [ -f "$target.dist" ]; then
     cat "$target.dist" >"$target"
     rm -f "$target.dist"
@@ -444,6 +704,11 @@ uninstall_file() {
   fi
 }
 
+# cmd_uninstall
+#
+# Removes every block and the generated environment.d file. It leaves the
+# selector and the cache directory in place, and says so in its output, so
+# you can delete them by hand if you don't want them.
 cmd_uninstall() {
   case ${1-} in
     '') ;;
@@ -472,16 +737,26 @@ cmd_uninstall() {
 
 # --- doctor -----------------------------------------------------------------
 
-# Names that interactive config must not shadow, on top of each shell's builtins.
-# Flattened before use: BSD awk rejects newlines in -v values.
+# Commands that no alias or function in the interactive config should
+# redefine, in addition to each shell's builtins. Scripts and coding agents
+# run commands in interactive shells too, and expect them to behave the
+# standard way. The list is split over lines for reading, and the newlines
+# are turned into spaces before it's passed to awk with -v, because BSD awk
+# on macOS rejects a -v value that contains a newline.
 COMMON_COMMANDS='awk cat cd chmod cp curl cut diff du echo env find git grep head
 kill less ln ls make man mkdir mv ps pwd rm rmdir sed sort ssh tail tar test
 touch tr wc which xargs'
 
+# Running totals for the summary line and the exit status. Each check section
+# saves the total before it starts, and prints "ok" if it didn't grow.
 ERRORS=0
 WARNINGS=0
 
-# report LEVEL MESSAGE: print one finding, indented under the current heading.
+# report LEVEL MESSAGE
+#
+# Prints one finding, indented under the current heading, and counts errors
+# and warnings. Other levels, such as info and ok, are printed but not
+# counted.
 report() {
   case $1 in
     error) ERRORS=$((ERRORS + 1)) ;;
@@ -490,7 +765,7 @@ report() {
   printf '  %-6s %s\n' "$1" "$2"
 }
 
-# show PATH: PATH with $HOME replaced by ~.
+# Prints a path with the home directory shortened to ~, to keep messages short.
 show() {
   case $1 in
     "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;;
@@ -498,7 +773,20 @@ show() {
   esac
 }
 
-# inspect FILE: print key=value facts about FILE's dotfiles blocks.
+# inspect FILE
+#
+# Reads FILE once and prints facts about its dotfiles blocks as KEY=VALUE
+# lines, which doctor_file then checks:
+#
+#   blocks   how many opening markers there are
+#   broken   1 if a block is unterminated or nested
+#   first    1 if the first line that isn't blank or a shebang is a marker
+#   version  the version in the first block's opening marker, such as v2
+#   dir      the first block's DOTFILES_DIR value, as written
+#
+# In awk, a bare regular expression such as /^# >>> dotfiles / evaluates to
+# 1 or 0, so `first` records whether that first line was a marker. The
+# version is the fourth field of "# >>> dotfiles v2 >>> ...".
 inspect() {
   awk '
     NR == 1 && /^#!/ { next }
@@ -520,32 +808,52 @@ inspect() {
     }' "$1"
 }
 
-# first_block FILE: print the first block, markers included.
+# Prints the first dotfiles block in a file, markers included.
 first_block() {
   awk '/^# >>> dotfiles / { on = 1 } on { print } on && $0 == "# <<< dotfiles <<<" { exit }' "$1"
 }
 
-# sourced_files BLOCKFILE: repo-relative files a block always sources.
-# Host files are optional and skipped.
+# sourced_files BLOCKFILE
+#
+# Prints the repo-relative paths of the files a block always sources, such
+# as sh/env.sh, taken from each "$DOTFILES_DIR/..." string in it. Host files
+# are optional, so they shouldn't be reported as missing. Their paths contain
+# ${DOTFILES_PROFILE-}, and the sed pattern [^"$]* stops at a $, so they
+# don't match.
 sourced_files() {
   sed -n 's/.*"\$DOTFILES_DIR\/\([^"$]*\)".*/\1/p' "$1" | sort -u
 }
 
-# version_num vN: print N, or 0 if it isn't a version.
+# version_num vN
+#
+# Prints the number N from a block version such as v2, or 0 if the text
+# isn't a version. Comparing numbers rather than text makes v10 newer than
+# v9, and the 0 keeps `[ -lt ]` from failing on a missing or garbled version.
 version_num() {
   n=${1#v}
   case $n in '' | *[!0-9]*) n=0 ;; esac
   printf '%s' "$n"
 }
 
-# contains NEEDLE HAYSTACK: true if NEEDLE's text appears in HAYSTACK.
+# contains NEEDLE HAYSTACK
+#
+# Succeeds if the whole text of file NEEDLE appears somewhere in file
+# HAYSTACK. Each file is read into one string and compared with index(),
+# which matches plain text, unlike grep, which would need one pattern per
+# line. An empty NEEDLE never matches.
 contains() {
   awk 'FNR == NR { a = a $0 "\n"; next } { b = b $0 "\n" }
        END { exit !(a != "" && index(b, a)) }' "$1" "$2"
 }
 
-# doctor_file TEMPLATE TARGET: check one entry file and save its local content
-# to $TMP/local/NAME.
+# doctor_file TEMPLATE TARGET
+#
+# Checks one entry file and reports what's wrong with its block. It also
+# saves the file's own content, everything outside the block, to
+# $TMP/local/NAME, for doctor_local to print.
+#
+# A problem that makes the rest meaningless, such as a missing file or a
+# broken block, is reported and ends the check for that file early.
 doctor_file() {
   tmpl=$1 target=$2 name=${2##*/}
   before=$((ERRORS + WARNINGS))
@@ -558,6 +866,7 @@ doctor_file() {
     report error "not a regular file"; return 0
   fi
 
+  # fact KEY prints the value of one of inspect's KEY=VALUE lines.
   inspect "$target" >"$TMP/facts"
   fact() { sed -n "s/^$1=//p" "$TMP/facts"; }
   blocks=$(fact blocks) broken=$(fact broken) first=$(fact first)
@@ -572,6 +881,9 @@ doctor_file() {
   [ "$blocks" -eq 1 ] || report error "$blocks blocks; \`dotfiles init\` merges them into one"
   [ "$first" -eq 1 ] || report error "block is not at the top; something was added above it (\`dotfiles init\` moves it back)"
 
+  # The block stores the path with a literal $HOME (see block_dir). Expand it
+  # here to get a real directory to check. The quotes in '$HOME' make the
+  # shell match those five characters, not the value of HOME.
   first_block "$target" >"$TMP/block"
   case $dir in
     '$HOME') rdir=$HOME ;;
@@ -584,11 +896,15 @@ doctor_file() {
   elif [ ! -d "$rdir" ]; then
     report error "DOTFILES_DIR does not exist: $dir"
   else
+    # A block pointing at a different copy of the repo still works, but edits
+    # to this copy won't reach that shell, which is easy to miss.
     if [ "$(cd "$rdir" && pwd -P)" = "$DOTFILES_DIR" ]; then
       same_dir=1
     else
       report warn "DOTFILES_DIR is $rdir, but this repo is $DOTFILES_DIR (run \`dotfiles init\` from the repo you use)"
     fi
+    # env.sh loads sh/lib.sh itself, so no block names lib.sh, but a missing
+    # lib.sh breaks the block just the same.
     for f in $(sourced_files "$TMP/block"); do
       [ -r "$rdir/$f" ] || report error "sourced file is missing: \$DOTFILES_DIR/$f"
       if [ "$f" = sh/env.sh ] && [ ! -r "$rdir/sh/lib.sh" ]; then
@@ -597,6 +913,10 @@ doctor_file() {
     done
   fi
 
+  # Compare the block's version with the template's. Only when they match,
+  # and the block points at this repo, is the block compared line by line
+  # with what init would write now. Otherwise it's expected to differ, and
+  # an "edited inside the markers" warning would be misleading.
   want=$(sed -n '1s/^# >>> dotfiles \(v[0-9]*\) .*/\1/p' "$tmpl")
   have_n=$(version_num "$version") want_n=$(version_num "$want")
   if [ "$have_n" -lt "$want_n" ]; then
@@ -609,6 +929,10 @@ doctor_file() {
       report warn "block was edited inside the markers (\`dotfiles init\` restores it)"
   fi
 
+  # Save the machine's own content: the file without its block or shebang.
+  # On Linux, also warn if the full text of the distro skeleton appears below
+  # the block. init replaces untouched skeleton copies (see inject_file), so
+  # one showing up later brings back the problems that avoids.
   strip "$target" | awk 'NR == 1 && /^#!/ { next } { print }' >"$TMP/local/$name"
   if [ "$DOTFILES_OS" = linux ] && [ -f "$SKEL_DIR/$name" ] &&
     contains "$SKEL_DIR/$name" "$TMP/local/$name"; then
@@ -618,15 +942,34 @@ doctor_file() {
   [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "block $version at the top"
 }
 
-# shadow_names SHELL: print "kind name" for each alias or function the shell's
-# interactive startup defines over a builtin or a common command.
+# shadow_names SHELL
+#
+# Prints "alias NAME" or "function NAME" for each alias or function that an
+# interactive SHELL (bash or zsh) defines with the name of one of its
+# builtins or of a command in COMMON_COMMANDS.
+#
+# - It starts a real interactive shell (-i), so definitions from anywhere in
+#   startup count: the repo's rc files, lines below the block, and files in
+#   /etc. Reading the repo's files alone would miss those.
+# - The probe prints each name with a letter in front: B for a builtin, A for
+#   an alias, F for a function. In bash, compgen -b and -a list builtins and
+#   aliases, and declare -F lists functions. In zsh, ${(k)builtins} is the
+#   list of keys of the builtins table, and /#/B adds "B " to the start of
+#   each one.
+# - stdin comes from /dev/null so the interactive shell can't wait for, or
+#   read, your keyboard input, and its stderr is discarded so startup noise
+#   doesn't end up in doctor's output.
+# - The awk program collects every line and decides at the end, because a
+#   name is only a problem once the full list of builtins is known.
 shadow_names() {
   case $1 in
     bash) probe='compgen -b | sed "s/^/B /"; compgen -a | sed "s/^/A /"
                  declare -F | sed "s/^declare -f[^ ]* /F /"' ;;
     zsh) probe='print -rl -- ${(k)builtins/#/B } ${(k)aliases/#/A } ${(k)functions/#/F }' ;;
   esac
-  # Prefix probe lines so stray output from rc files can't be mistaken for names.
+  # The probe's lines get an @df@ prefix and only lines with it are kept, so
+  # anything else the rc files print, such as a greeting, can't be mistaken
+  # for a name.
   "$1" -ic "{ $probe; } | sed 's/^/@df@ /'" </dev/null 2>/dev/null |
     sed -n 's/^@df@ //p' |
     awk -v common="$(printf '%s' "$COMMON_COMMANDS" | tr '\n' ' ')" '
@@ -642,6 +985,11 @@ shadow_names() {
       }'
 }
 
+# doctor_general
+#
+# Checks what isn't tied to one entry file: the selected profile, on Linux the
+# freshness of the environment.d file, aliases and functions that shadow
+# commands, and required tools that aren't installed.
 doctor_general() {
   say "general"
   before=$((ERRORS + WARNINGS))
@@ -658,6 +1006,9 @@ doctor_general() {
     if [ ! -e "$conf" ]; then
       report info "$(show "$conf") not generated yet (\`dotfiles sync-env\`)"
     else
+      # The file is out of date if either env.sh changed after it was
+      # written. -nt compares modification times, which is why sync-env
+      # touches the file even when its content didn't change.
       for f in sh/env.sh "hosts/$profile/env.sh"; do
         if [ -f "$DOTFILES_DIR/$f" ] && [ "$DOTFILES_DIR/$f" -nt "$conf" ]; then
           report warn "$(show "$conf") is older than $f (\`dotfiles sync-env\`)"
@@ -667,6 +1018,8 @@ doctor_general() {
     fi
   fi
 
+  # Shells that aren't installed are skipped. If the check itself fails, that
+  # gets a warning, so a broken check isn't mistaken for a clean result.
   for sh in bash zsh; do
     command -v "$sh" >/dev/null 2>&1 || continue
     if ! shadow_names "$sh" >"$TMP/shadow"; then
@@ -685,8 +1038,13 @@ doctor_general() {
   [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "profile, environment and aliases"
 }
 
-# doctor_local DIFF: print each entry file's content below the block, or with
-# DIFF=1 its changes since the last run. Then save a new snapshot.
+# doctor_local DIFF
+#
+# Prints each entry file's own content, the part outside the block, so local
+# additions are easy to find when something conflicts with the repo. With
+# DIFF set to 1, it prints only what changed since the last run instead.
+# Either way, it then saves the current content as the snapshot for the next
+# run, under the cache directory.
 doctor_local() {
   snapdir=$CACHE_DIR/doctor
   say "local content below each block"
@@ -700,6 +1058,9 @@ doctor_local() {
         say "  ~/$name: unchanged since last run"
       else
         say "  ~/$name: changed since last run"
+        # diff exits with status 1 whenever the files differ, which here is
+        # expected. The pipeline's status is sed's, not diff's, but `|| :`
+        # makes sure this line can never stop the script under set -e.
         diff -u -L "last run" -L "now" "$old" "$cur" | sed 's/^/    /' || :
       fi
     elif [ -s "$cur" ]; then
@@ -709,14 +1070,22 @@ doctor_local() {
       say "  ~/$name: (empty)"
     fi
   done
+  # The saved files are all named after dotfiles, such as .zshrc, and * doesn't
+  # match names starting with a dot. .[!.]* does, while excluding . and ..
+  # themselves. If nothing matches, the shell leaves the pattern as it is, so
+  # the -f test skips it.
   mkdir -p "$snapdir"
   for f in "$TMP/local"/.[!.]*; do
     if [ -f "$f" ]; then cp "$f" "$snapdir/"; fi
   done
 }
 
-# parse_check "SHELL..." FILE...: report an error for each repo-relative FILE
-# that one of the shells can't parse. Missing files and shells are skipped.
+# parse_check "SHELL..." FILE...
+#
+# Reports an error for each repo-relative FILE that one of the shells can't
+# parse. `SHELL -n` reads a file and checks its syntax without running any of
+# it, so the check is safe to run on any layer file. Missing files and shells
+# that aren't installed are skipped, and each file is reported at most once.
 parse_check() {
   shells=$1
   shift
@@ -725,7 +1094,9 @@ parse_check() {
     for sh in $shells; do
       command -v "$sh" >/dev/null 2>&1 || continue
       if ! msg=$("$sh" -n "$DOTFILES_DIR/$f" 2>&1); then
-        # First line of the message, with the repo path trimmed.
+        # Keep only the first line of the shell's message, and remove the
+        # repo path from it wherever it appears, so the report stays on one
+        # short line.
         msg=$(printf '%s\n' "$msg" | awk -v p="$DOTFILES_DIR/" '
           { while ((i = index($0, p))) $0 = substr($0, 1, i - 1) substr($0, i + length(p)); print; exit }')
         report error "$f does not parse in $sh: $msg"
@@ -735,8 +1106,13 @@ parse_check() {
   done
 }
 
-# doctor_layers: syntax-check every layer file with each shell that loads it,
-# including the selected profile's files.
+# doctor_layers
+#
+# Checks the syntax of every layer file in each shell that loads it,
+# including the selected profile's files. The env layer is loaded by sh, bash
+# and zsh, so it must parse in all three; each rc file only needs to parse in
+# its own shell. With no profile selected, the host paths point at files that
+# don't exist, and parse_check skips them.
 doctor_layers() {
   say "layers"
   before=$((ERRORS + WARNINGS))
@@ -747,6 +1123,10 @@ doctor_layers() {
   [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "every layer file parses"
 }
 
+# cmd_doctor [--diff]
+#
+# Runs every check and prints a summary. It exits non-zero only when there
+# are errors; warnings are reported but don't fail it.
 cmd_doctor() {
   diff_mode=0
   case ${1-} in
@@ -765,6 +1145,7 @@ cmd_doctor() {
   doctor_general
   doctor_local "$diff_mode"
 
+  # Use the singular word when a count is exactly 1.
   e=errors w=warnings
   [ "$ERRORS" -ne 1 ] || e=error
   [ "$WARNINGS" -ne 1 ] || w=warning
@@ -774,8 +1155,13 @@ cmd_doctor() {
 
 # --- install ----------------------------------------------------------------
 
-# detect_manager: print the package manager to use. macOS uses Homebrew;
-# Linux prefers the system manager, then Homebrew.
+# detect_manager
+#
+# Prints the name of the package manager to use, or fails if none is found.
+# macOS uses Homebrew. Linux prefers the system's own manager and falls back
+# to Homebrew. Each candidate is COMMAND:NAME, because apt is detected by its
+# apt-get command; ${m%%:*} is the command to look for and ${m#*:} is the
+# name to print.
 detect_manager() {
   if [ "$DOTFILES_OS" = darwin ]; then
     set -- brew:brew
@@ -791,7 +1177,11 @@ detect_manager() {
   return 1
 }
 
-# run_step CMD...: print a command, and run it when applying.
+# run_step COMMAND...
+#
+# Prints COMMAND, and runs it too when install was given --yes (apply is 1).
+# Printing the exact command in both cases lets a dry run show precisely
+# what --yes would do.
 run_step() {
   if [ "$apply" -eq 0 ]; then
     say "would run  $*"
@@ -801,6 +1191,12 @@ run_step() {
   "$@" || { err "install: command failed: $*"; return 1; }
 }
 
+# cmd_install [--yes] [--manager NAME]
+#
+# Installs the tools from packages.toml that aren't installed yet. Without
+# --yes it's a dry run that only prints the plan and the commands. This is
+# the only command that runs package managers or sudo, so nothing else can
+# change the system outside your home directory.
 cmd_install() {
   apply=0 pm=
   while [ $# -gt 0 ]; do
@@ -824,6 +1220,9 @@ cmd_install() {
     fi
     die "install: no supported package manager found (apt, dnf, pacman or brew)"
   fi
+  # System package managers need root, so they run through sudo unless this
+  # already is root. Homebrew never does, because it refuses to run as root.
+  # ${sudo:+ (with sudo)} prints " (with sudo)" only when sudo is set.
   sudo=
   if [ "$pm" != brew ] && [ "$(id -u)" -ne 0 ]; then
     command -v sudo >/dev/null 2>&1 || die "install: $pm needs root, and sudo isn't available"
@@ -831,6 +1230,12 @@ cmd_install() {
   fi
   say "manager  $pm${sudo:+ (with sudo)}"
 
+  # Sort each tool into one of three groups: already installed, installed
+  # through mise (when it has a mise key, which takes priority), or installed
+  # by the package manager. Tools to install are also written to
+  # $TMP/planned, so they can be checked again afterwards. mise_planned
+  # records whether mise itself is among the packages; the spaces around
+  # " $bins " make the case pattern match mise only as a whole word.
   TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
   tools_for "$pm" >"$TMP/tools"
   pkgs= specs= mise_planned=0
@@ -859,7 +1264,12 @@ cmd_install() {
 
   failed=0
   if [ -n "$pkgs" ]; then
-    # Package names never contain spaces, so $pkgs is split on purpose.
+    # All missing packages go into one install command. $pkgs is left
+    # unquoted on purpose so it splits into one argument per package, which
+    # is safe because package names never contain spaces. $sudo is unquoted
+    # too, so when it's empty it disappears instead of becoming an empty
+    # argument. apt runs `apt-get update` first, because on a fresh system
+    # its package lists can be empty or out of date.
     case $pm in
       brew) run_step brew install $pkgs ;;
       apt) run_step $sudo apt-get update && run_step $sudo apt-get install -y $pkgs ;;
@@ -868,7 +1278,9 @@ cmd_install() {
     esac || failed=1
   fi
 
-  # Runtimes go through mise, which may have been installed just above.
+  # Runtimes such as node go through mise, which may have been installed just
+  # above. In a dry run, mise isn't there yet, so the mise steps are still
+  # shown if mise is in the plan.
   if [ -n "$specs" ]; then
     if command -v mise >/dev/null 2>&1 || { [ "$apply" -eq 0 ] && [ "$mise_planned" -eq 1 ]; }; then
       for spec in $specs; do
@@ -884,7 +1296,9 @@ cmd_install() {
     return 0
   fi
 
-  # A package can install under a command name packages.toml doesn't list.
+  # Check that each installed tool can now be found. A package can succeed
+  # and still not provide the expected command, for example when it installs
+  # under a different name than packages.toml's `bin` key lists.
   while IFS='	' read -r tool bins; do
     has_any "$bins" || warn "install: $tool is still missing; none of '$bins' is on PATH (check its \`bin\` key)"
   done <"$TMP/planned"
@@ -893,7 +1307,14 @@ cmd_install() {
 
 # --- other commands ---------------------------------------------------------
 
-# cmd_version: the git commit the repo is on, marked -dirty with local changes.
+# cmd_version
+#
+# Prints the git commit the repo is on, with -dirty added when there are
+# uncommitted changes. The repo has no releases, so the commit is the
+# version. `--exclude '*'` makes git describe ignore every tag, and --always
+# makes it print the short commit hash when no tag is used. If git is
+# missing or this isn't a clone, `|| :` keeps set -e from stopping the
+# script, and "unknown" is printed instead.
 cmd_version() {
   commit=
   if command -v git >/dev/null 2>&1; then
@@ -902,6 +1323,12 @@ cmd_version() {
   say "dotfiles ${commit:-unknown (not a git clone)}"
 }
 
+# cmd_test [--profile]
+#
+# Runs the CLI test suites, stopping at the first that fails, then the load
+# matrix, which checks which files each kind of shell loads. The matrix runs
+# with exec, so its exit status becomes this command's, and the arguments
+# (such as --profile) are passed on to it.
 cmd_test() {
   for t in init uninstall doctor sync-env install faults; do
     sh "$DOTFILES_DIR/test/$t.sh" || return 1
@@ -915,6 +1342,11 @@ cmd_test() {
   exec sh "$DOTFILES_DIR/test/matrix.sh" "$@"
 }
 
+# --- main -------------------------------------------------------------------
+#
+# Run the command named by the first argument. A missing or unknown command
+# prints the usage to stderr and exits with status 2, the usual status for
+# being called the wrong way.
 [ $# -gt 0 ] || { usage >&2; exit 2; }
 cmd=$1
 shift

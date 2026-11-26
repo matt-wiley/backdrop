@@ -1,2 +1,6 @@
-# hosts/example/packages.toml: tools added for the "example" profile.
-# Same format as the shared packages.toml.
+# hosts/example/packages.toml
+#
+# Extra tools that `dotfiles install` installs on machines using this profile,
+# in the same format as the shared packages.toml. A table here with the same
+# name as a shared one replaces it, so you can install a tool differently on
+# these machines.
