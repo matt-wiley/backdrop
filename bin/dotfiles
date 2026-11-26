@@ -41,11 +41,11 @@ usage() {
 usage: dotfiles <command> [options]
 
 commands:
-  init [--profile NAME]   inject or upgrade blocks, write selector, build caches
+  init [--profile NAME]   inject or upgrade blocks, write selector, create cache dir
   install [--yes]         install tools from packages.toml (dry run without --yes)
   doctor [--diff]         report health and drift of each entry file
   sync-env                Linux: write ~/.config/environment.d/dotfiles.conf
-  test [--profile]        run the load matrix locally
+  test [--profile]        run the CLI test suites, then the load matrix
   uninstall               remove every block and environment.d/dotfiles.conf
   version                 print the git commit this repo is on
 USAGE

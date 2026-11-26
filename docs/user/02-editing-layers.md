@@ -16,26 +16,34 @@ There are two layers, and two questions decide which file a setting goes in:
 | **Scripts need it** (`PATH`, exports)                           | `sh/env.sh`                    | `hosts/<profile>/env.sh`              |
 | **Only you need it** (aliases, options, prompt, tools, plugins) | `zsh/rc.zsh` or `bash/rc.bash` | `hosts/<profile>/rc.zsh` or `rc.bash` |
 
-Each kind of shell start reads its own startup files, and the block in each one loads the files that apply:
+The layers load top to bottom, and each row can add to or override the rows above it:
 
-![Which startup files each kind of shell reads, and which layers each file's block loads](load-flow-files.svg)
+![The layers, in the order they load: env.sh and the profile's env.sh, then rc.zsh or rc.bash and the profile's rc file, then your own lines, then load-last plugins](layer-stack.svg)
 
-Read top to bottom, this is the order inside one interactive shell. Each row loads after the rows above it, so it can add to or override them:
+For variables, aliases and options, the last definition wins. For `PATH`, each `_df_path_prepend` goes in front of the ones before it, so the last call is searched first.
 
-| Order | File                                                  | Loaded by                                                              |
-| ----- | ----------------------------------------------------- | ---------------------------------------------------------------------- |
-| 1     | `sh/env.sh`                                           | Every shell: terminals, scripts, `ssh host cmd`, agents, desktop login |
-| 2     | `hosts/<profile>/env.sh`                              | Every shell                                                            |
-| 3     | `zsh/rc.zsh` or `bash/rc.bash`                        | Interactive zsh, or interactive bash                                   |
-| 4     | `hosts/<profile>/rc.zsh` or `rc.bash`                 | Interactive zsh, or interactive bash                                   |
-| 5     | Anything below the block in `~/.zshrc` or `~/.bashrc` | That machine only                                                      |
-| 6     | Plugins listed in `_df_load_last`                     | Interactive zsh, once, at the first prompt                             |
+### Which shells load which layers
 
-Variables, aliases and options: the last definition wins. `PATH`: each `_df_path_prepend` goes in front of the ones before it, so the last call is searched first.
+A shell only loads the layers if it reads a startup file, and which files it reads depends on how it was started:
 
-Inside one shell start, each entry file runs its block first, then your own lines below it. Login shells load the environment layer twice, which is harmless:
+| Shell start                                                 | Startup files it reads                                                         | Layers it loads                              |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------- |
+| Any zsh, including `zsh -c`, zsh scripts and `ssh host cmd` | `~/.zshenv`                                                                    | environment                                  |
+| zsh login shell (every macOS Terminal window)               | `~/.zshenv`, `~/.zprofile`                                                     | environment, twice                           |
+| Interactive zsh                                             | `~/.zshenv`, `~/.zshrc`                                                        | environment, interactive                     |
+| Interactive bash                                            | `~/.bashrc`                                                                    | environment, interactive                     |
+| bash login shell                                            | `~/.bash_profile`, which sources `~/.profile`, then `~/.bashrc` if interactive | environment, then interactive if interactive |
+| `ssh host cmd` on a bash host                               | `~/.bashrc`                                                                    | environment                                  |
+| `sh` login shell, Linux desktop login                       | `~/.profile`                                                                   | environment                                  |
+| `bash -c`, `sh -c`, `bash script.sh`, `sh script.sh`        | none                                                                           | none                                         |
 
-![The order of files and layers inside a zsh login shell and a bash login shell](load-flow-order.svg)
+The last row is fine in practice. Exported variables pass from a process to everything it starts, so a script run from your terminal already has your `PATH`. The environment layer matters for shells that don't start from a terminal that has it: `ssh host cmd`, and editors or coding agents opened from the Dock or a launcher that run `zsh -c`. On Linux, desktop apps get it through [`sync-env`](01-getting-started.md#desktop-apps-on-linux).
+
+### Inside one shell start
+
+Each startup file runs its block first, then your own lines below it. Login shells load the environment layer twice, which is harmless:
+
+![The order of startup files in a zsh login terminal and a bash login terminal, and which rows of the layer stack each one loads](startup-order.svg)
 
 ## Before and after any edit
 
@@ -53,7 +61,7 @@ If a new shell won't start, see [Editing a layer safely](01-getting-started.md#e
 
 **Files:** `sh/env.sh` for every machine; `hosts/<profile>/env.sh` for one profile.
 
-This layer runs in every shell, including the many short-lived shells that scripts and tools start, so it has strict rules:
+This layer runs in every shell that reads a startup file, including the many short-lived ones that scripts and tools start, so it has strict rules:
 
 - **POSIX `sh` only.** `sh` loads this layer too, so no bash or zsh syntax such as `[[ ]]`, arrays or `local`.
 - **Silent.** Never print anything.
@@ -176,7 +184,7 @@ setopt auto_cd
 
 ```sh
 # bash/rc.bash
-shopt -s globstar
+shopt -s globstar 2>/dev/null   # bash 4+; macOS ships bash 3.2 as /bin/bash
 ```
 
 ### Keybindings
