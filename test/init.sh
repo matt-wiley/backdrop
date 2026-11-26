@@ -20,7 +20,7 @@ check "reports unchanged files as ok" test "$(grep -cE '^ok +.*/\.(profile|bash_
 fresh
 printf 'export FOO=1\nalias x=y\n' >"$H/.zshrc"
 run_init
-check "block is first in existing file" test "$(first_line "$H/.zshrc")" = '# >>> dotfiles v1 >>> managed by `dotfiles init`; do not edit inside'
+check "block is first in existing file" test "$(first_line "$H/.zshrc")" = '# >>> dotfiles v2 >>> managed by `dotfiles init`; do not edit inside'
 check "keeps machine content" sh -c 'tail -n 3 "$1" | cmp -s - "$2"' _ "$H/.zshrc" /dev/fd/3 3<<'X'
 
 export FOO=1
@@ -50,7 +50,7 @@ echo two
 X
 run_init
 check "collapses duplicate blocks" test "$(count_blocks "$H/.bashrc")" -eq 1
-check "upgrades block version" grep -q '^# >>> dotfiles v1 ' "$H/.bashrc"
+check "upgrades block version" grep -q '^# >>> dotfiles v2 ' "$H/.bashrc"
 check "replaces old repo path" sh -c '! grep -q /old/path "$1"' _ "$H/.bashrc"
 check "keeps content order" sh -c 'grep "^echo" "$1" | tr "\n" " " | grep -qx "echo one echo two "' _ "$H/.bashrc"
 

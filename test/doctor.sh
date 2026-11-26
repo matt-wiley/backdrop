@@ -9,7 +9,7 @@ healthy() { fresh; run_init --profile example; }
 healthy
 check "passes on a fresh init" run_doctor
 check "reports no errors or warnings" out_has '^doctor: 0 errors, 0 warnings$'
-check "marks each file ok" test "$(grep -c '^  ok     block v1 at the top$' "$root/out")" -eq 6
+check "marks each file ok" test "$(grep -c '^  ok     block v2 at the top$' "$root/out")" -eq 6
 
 # Errors: exit code is non-zero.
 healthy
@@ -54,9 +54,9 @@ check "names lib.sh" out_has 'sourced file is missing: \$DOTFILES_DIR/sh/lib.sh'
 
 # Warnings: exit code stays zero.
 healthy
-sed '1s/ v1 / v0 /' "$H/.bashrc" >"$root/tmp" && mv "$root/tmp" "$H/.bashrc"
+sed '1s/ v2 / v0 /' "$H/.bashrc" >"$root/tmp" && mv "$root/tmp" "$H/.bashrc"
 check "passes with a stale block" run_doctor
-check "warns about the stale block" out_has 'warn   block is v0, repo has v1'
+check "warns about the stale block" out_has 'warn   block is v0, repo has v2'
 
 healthy
 sed 's/^\(\[ -r "\$DOTFILES_DIR\/sh\/env.sh" \]\)/# \1/' "$H/.profile" >"$root/tmp" && mv "$root/tmp" "$H/.profile"

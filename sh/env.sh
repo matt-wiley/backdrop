@@ -1,4 +1,6 @@
-# sh/env.sh: layer 1, environment. Sourced by every shell, interactive or not.
+# sh/env.sh: environment. Sourced by every shell, interactive or not:
+# terminals, scripts, `ssh host cmd`, agents. Put PATH entries and exported
+# variables here; everything else goes in zsh/rc.zsh or bash/rc.bash.
 # Rules: POSIX sh, idempotent, silent, exports only, no subprocess beyond uname.
 
 . "$DOTFILES_DIR/sh/lib.sh"
@@ -11,9 +13,6 @@ if [ -z "${DOTFILES_OS-}" ]; then
     *) DOTFILES_OS=linux ;;
   esac
   export DOTFILES_OS
-fi
-if [ -r "$DOTFILES_DIR/sh/os/$DOTFILES_OS.sh" ]; then
-  . "$DOTFILES_DIR/sh/os/$DOTFILES_OS.sh"
 fi
 
 # zsh: Ubuntu's /etc/zsh/zshrc runs its own uncached compinit unless this is
@@ -28,7 +27,21 @@ if [ -r "$HOME/.config/dotfiles/host" ]; then
   read -r DOTFILES_PROFILE <"$HOME/.config/dotfiles/host" || :
 fi
 
-# PATH: last prepend wins, so list from lowest to highest priority.
+# PATH: each prepend goes in front of the ones before it, so this list runs
+# from lowest to highest priority. A profile's env.sh loads after this file,
+# so its entries come first of all.
+
+# OS directories first, so your own directories end up ahead of them.
+case $DOTFILES_OS in
+  darwin)
+    # /etc/zprofile runs path_helper after ~/.zshenv, which is why ~/.zprofile
+    # sources env.sh again: these prepends then land back in front.
+    _df_path_prepend /usr/local/bin
+    _df_path_prepend /opt/homebrew/bin
+    ;;
+  linux) ;;
+esac
+
 _df_path_prepend "$HOME/.local/share/mise/shims"
 _df_path_prepend "$HOME/.local/bin"
 

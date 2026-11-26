@@ -6,33 +6,19 @@ It doesn't replace your `~/.zshrc`, `~/.bashrc` or other startup files. Instead,
 
 ![Which startup files each kind of shell reads, and which layers each file's block loads](load-flow-files.svg)
 
-Every shell reaches the environment layer; only interactive shells reach the interactive layers. [Editing the layers](02-editing-layers.md#how-the-layers-fit-together) shows the order inside a single shell start.
+Every shell reaches the environment layer, `sh/env.sh`; only interactive shells reach `zsh/rc.zsh` or `bash/rc.bash`. [Editing the layers](02-editing-layers.md#how-the-layers-fit-together) shows the order inside a single shell start.
 
 ## What you need
 
 - Linux or macOS.
-- bash or zsh as your shell, and either curl or wget (for a release) or `git` (for a clone). Everything else the CLI needs ships with the OS.
+- bash or zsh as your shell, and `git`. Everything else the CLI needs ships with the OS.
 - For `dotfiles install`: Homebrew on macOS, or apt, dnf, pacman or Homebrew on Linux.
 
 ## Set up a machine
 
-There are two ways to get the files:
+The repo is meant to be edited and versioned, so each machine works from a git clone.
 
-- **A release,** with one command and no git. Upgrades replace the files, so edits you make to shared files need copying back by hand after each upgrade. Profiles you create carry over.
-- **A git clone,** if you'll change the config and want those changes versioned. The rest of this guide assumes a clone, but every step after the install works the same either way.
-
-### 1. Get the files
-
-To install a release, run the installer with curl or wget. It also does steps 2 and 4 below for you:
-
-```sh
-curl -fsSL https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | sh
-wget -qO- https://github.com/matt-wiley/backdrop/releases/latest/download/install.sh | sh
-```
-
-The [README](../../README.md#install) lists its options, how to install a specific version and how to upgrade.
-
-To clone instead:
+### 1. Clone the repo
 
 ```sh
 git clone https://github.com/matt-wiley/backdrop.git ~/.dotfiles
@@ -59,12 +45,11 @@ cp -R ~/.dotfiles/hosts/example ~/.dotfiles/hosts/laptop
 
 Every file in a profile is optional. Each one loads right after the shared file it overrides:
 
-| Profile file | Overrides | Loads in |
-| --- | --- | --- |
-| `env.sh` | `sh/env.sh` | every shell |
-| `interactive.sh` | `sh/interactive.sh` | interactive bash and zsh |
-| `rc.bash` | `bash/rc.bash` | interactive bash |
-| `rc.zsh` | `zsh/rc.zsh` | interactive zsh |
+| Profile file    | Overrides       | Loads in           |
+| --------------- | --------------- | ------------------ |
+| `env.sh`        | `sh/env.sh`     | every shell        |
+| `rc.bash`       | `bash/rc.bash`  | interactive bash   |
+| `rc.zsh`        | `zsh/rc.zsh`    | interactive zsh    |
 | `packages.toml` | `packages.toml` | `dotfiles install` |
 
 You can skip the profile: run `init` without `--profile`, and the machine gets the shared config only. `doctor` will warn that no profile is selected until you pick one.
@@ -110,18 +95,26 @@ dotfiles install --yes    # does it
 
 ## Where to put a setting
 
-This is a quick reference. [Editing the layers](02-editing-layers.md) has examples for each kind of change.
+Two questions decide where a setting goes:
 
-| You want | Put it in | Notes |
-| --- | --- | --- |
-| An environment variable or `PATH` entry, everywhere | `sh/env.sh` | Reaches every shell, including scripts and `ssh host cmd` |
-| The same, on one machine or profile | `hosts/<profile>/env.sh` | |
-| An alias or simple function, both shells | `sh/interactive.sh` | Interactive shells only |
-| bash or zsh options, completion, keybinds, prompt | `bash/rc.bash` or `zsh/rc.zsh` | |
-| A plugin that must load last (syntax highlighting) | `zsh/load-last.zsh` | Runs once, at the first prompt |
-| A tool to install | `packages.toml` | See [Adding a tool](#adding-a-tool) |
-| Something for this machine only, not versioned | Below the block in the entry file | `doctor` shows it |
-| A secret | Below the block, or a gitignored file in your profile | See [Secrets](#secrets) |
+1. **Would a script need it?** `PATH` entries and exported variables that scripts, `ssh host cmd` and agents rely on go in `env.sh`. Everything else (aliases, functions, options, completion, prompt, tool init, plugins) goes in the rc file for your shell.
+2. **Every machine, or one profile?** The shared file, or the same-named file in `hosts/<profile>/`. The profile file loads right after the shared one, so it wins.
+
+|                      | Every machine                    | One profile                             |
+| -------------------- | -------------------------------- | --------------------------------------- |
+| **Scripts need it**  | `sh/env.sh`                      | `hosts/<profile>/env.sh`                |
+| **Only you need it** | `zsh/rc.zsh` (or `bash/rc.bash`) | `hosts/<profile>/rc.zsh` (or `rc.bash`) |
+
+A few things sit outside that grid:
+
+| You want                                           | Put it in                                                 | Notes                               |
+| -------------------------------------------------- | --------------------------------------------------------- | ----------------------------------- |
+| A plugin that must load last (syntax highlighting) | `_df_load_last` in `zsh/rc.zsh` or the profile's `rc.zsh` | Sourced once, at the first prompt   |
+| A tool to install                                  | `packages.toml`                                           | See [Adding a tool](#adding-a-tool) |
+| Something for this machine only, not versioned     | Below the block in the entry file                         | `doctor` shows it                   |
+| A secret                                           | Below the block, or a gitignored file in your profile     | See [Secrets](#secrets)             |
+
+[Editing the layers](02-editing-layers.md) has examples for each kind of change.
 
 ### Rules for `env.sh`
 
@@ -129,7 +122,7 @@ The env layer runs in every shell, including the many non-interactive shells tha
 
 - **POSIX `sh` only.** No bash or zsh syntax, because `sh` loads it too.
 - **Silent.** No output, ever.
-- **Fast.** No subprocesses (no `$(...)` and no `eval "$(tool init)"`); those belong in the interactive layers.
+- **Fast.** No subprocesses (no `$(...)` and no `eval "$(tool init)"`); those belong in the rc files.
 - **Exports only.** Variables and `PATH`; no aliases or shell options.
 - **Add to `PATH` with the helper**, which skips directories that don't exist and never adds duplicates:
 
@@ -138,7 +131,7 @@ The env layer runs in every shell, including the many non-interactive shells tha
   export EDITOR=vim
   ```
 
-### Rules for the interactive layers
+### Rules for the rc files
 
 - **Don't redefine common commands.** No aliases or functions named `ls`, `cat`, `grep`, `cd` and the like; use new names such as `ll`. Scripts and coding agents expect the real commands, and `doctor` warns about these.
 - **Detect tools, not operating systems:** `_df_has fdfind && alias fd=fdfind`.
@@ -153,7 +146,7 @@ A mistake in a layer breaks every new shell, and in `env.sh` it also breaks scri
 1. Keep one terminal open while you edit, in case new ones won't start.
 2. Run `dotfiles doctor`. It checks that every layer file parses, in each shell that loads it, including your profile's files.
 3. Run `dotfiles test`. It starts every kind of shell with your profile and fails on an `exit`, an error message, or output from a non-interactive shell.
-4. Then open a new terminal; that's also the only way to try `load-last.zsh`.
+4. Then open a new terminal; that's also the only way to try the load-last plugins.
 
 If a new shell won't start, use the open terminal, or start one without startup files (`bash --noprofile --norc` or `zsh -f`), and undo the change with `git -C ~/.dotfiles restore <file>`. Moving the repo aside (`mv ~/.dotfiles ~/.dotfiles.off`) switches the config off everywhere at once; shells start without it.
 
@@ -184,22 +177,22 @@ Never put secrets in `hosts/`, or anywhere else in the repo. Either:
 - put them in a file the repo ignores (`hosts/<profile>/secrets.sh` or `hosts/<profile>/*.local.sh`) and source it from your profile:
 
   ```sh
-  # hosts/laptop/interactive.sh
+  # hosts/laptop/rc.zsh
   [ -r "$DOTFILES_DIR/hosts/laptop/secrets.sh" ] && . "$DOTFILES_DIR/hosts/laptop/secrets.sh"
   ```
 
-On Linux, anything the env layer exports is copied into `~/.config/environment.d/dotfiles.conf`. So a secret sourced from `env.sh` ends up in that file too. Source secrets from the interactive layers, as above, unless non-interactive shells really need them.
+On Linux, anything the env layer exports is copied into `~/.config/environment.d/dotfiles.conf`. So a secret sourced from `env.sh` ends up in that file too. Source secrets from an rc file, as above, unless non-interactive shells really need them.
 
 ## Day to day
 
-| When | Run |
-| --- | --- |
-| After pulling changes | `dotfiles doctor`; if it says a block is out of date, `dotfiles init` |
-| After changing `env.sh` or a profile's `env.sh` (Linux) | `dotfiles sync-env`, then log out and back in for desktop apps |
-| After adding tools to `packages.toml` | `dotfiles install`, then `dotfiles install --yes` |
-| When an installer edits your startup files | `dotfiles doctor` |
-| To see what changed locally since last time | `dotfiles doctor --diff` |
-| To switch this machine's profile | `dotfiles init --profile NAME` |
+| When                                                    | Run                                                                   |
+| ------------------------------------------------------- | --------------------------------------------------------------------- |
+| After pulling changes                                   | `dotfiles doctor`; if it says a block is out of date, `dotfiles init` |
+| After changing `env.sh` or a profile's `env.sh` (Linux) | `dotfiles sync-env`, then log out and back in for desktop apps        |
+| After adding tools to `packages.toml`                   | `dotfiles install`, then `dotfiles install --yes`                     |
+| When an installer edits your startup files              | `dotfiles doctor`                                                     |
+| To see what changed locally since last time             | `dotfiles doctor --diff`                                              |
+| To switch this machine's profile                        | `dotfiles init --profile NAME`                                        |
 
 Installers that append to `~/.zshrc` or `~/.bashrc` are fine: their lines land below the block. If one adds lines above the block instead, `doctor` reports an error, and `dotfiles init` moves the block back to the top.
 
@@ -214,7 +207,7 @@ A few values can't be written to that file exactly, such as ones containing `$` 
 ## Troubleshooting
 
 - **Something doesn't load:** run `DOTFILES_TRACE=1 zsh -ic exit` (or `bash -ic exit`) to see which repo files load, then `dotfiles doctor`, which also reports layer files that don't parse.
-- **A setting works in a terminal but not in a script:** it's probably in an interactive layer. Move it to `env.sh` if scripts need it.
+- **A setting works in a terminal but not in a script:** it's probably in an rc file. Move it to `env.sh` if scripts need it.
 - **The repo is missing or moved:** shells still start normally, without the repo's config. Run `dotfiles init` from the repo's new location.
 - **Startup is slow:** look for `$(...)` or `eval` in your profile's files and below the blocks.
 

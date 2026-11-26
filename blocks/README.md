@@ -13,5 +13,6 @@ the target file, between the `>>> dotfiles` and `<<< dotfiles` markers.
 | `zprofile.sh` | `~/.zprofile` |
 | `zshrc.sh` | `~/.zshrc` |
 
-Bump the `v1` in the opening marker whenever a template changes, so `init` can
-upgrade blocks in place and `doctor` can flag stale ones.
+Bump the version (`v1`, `v2`, ...) in the opening marker whenever a template
+changes, so `init` can upgrade blocks in place and `doctor` can flag stale ones.
+Keep every template on the same version, so `doctor` reports one block version.

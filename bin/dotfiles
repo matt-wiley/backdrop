@@ -47,7 +47,7 @@ commands:
   sync-env                Linux: write ~/.config/environment.d/dotfiles.conf
   test [--profile]        run the load matrix locally
   uninstall               remove every block and environment.d/dotfiles.conf
-  version                 print the installed version
+  version                 print the git commit this repo is on
 USAGE
 }
 
@@ -658,7 +658,7 @@ doctor_general() {
     if [ ! -e "$conf" ]; then
       report info "$(show "$conf") not generated yet (\`dotfiles sync-env\`)"
     else
-      for f in sh/env.sh sh/os/linux.sh "hosts/$profile/env.sh"; do
+      for f in sh/env.sh "hosts/$profile/env.sh"; do
         if [ -f "$DOTFILES_DIR/$f" ] && [ "$DOTFILES_DIR/$f" -nt "$conf" ]; then
           report warn "$(show "$conf") is older than $f (\`dotfiles sync-env\`)"
           break
@@ -741,10 +741,9 @@ doctor_layers() {
   say "layers"
   before=$((ERRORS + WARNINGS))
   host=hosts/$(read_profile)
-  parse_check "sh bash zsh" sh/lib.sh sh/env.sh sh/os/linux.sh sh/os/darwin.sh "$host/env.sh"
-  parse_check "bash zsh" sh/interactive.sh "$host/interactive.sh"
+  parse_check "sh bash zsh" sh/lib.sh sh/env.sh "$host/env.sh"
   parse_check bash bash/rc.bash "$host/rc.bash"
-  parse_check zsh zsh/rc.zsh zsh/load-last.zsh "$host/rc.zsh"
+  parse_check zsh zsh/rc.zsh "$host/rc.zsh"
   [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "every layer file parses"
 }
 
@@ -894,19 +893,17 @@ cmd_install() {
 
 # --- other commands ---------------------------------------------------------
 
-# cmd_version: the release in VERSION, plus the git commit for a clone.
+# cmd_version: the git commit the repo is on, marked -dirty with local changes.
 cmd_version() {
-  version=$(cat "$DOTFILES_DIR/VERSION" 2>/dev/null || echo unknown)
-  if [ -e "$DOTFILES_DIR/.git" ] && command -v git >/dev/null 2>&1; then
-    commit=$(git -C "$DOTFILES_DIR" describe --tags --always --dirty 2>/dev/null || :)
-    say "dotfiles $version${commit:+ (git $commit)}"
-  else
-    say "dotfiles $version"
+  commit=
+  if command -v git >/dev/null 2>&1; then
+    commit=$(git -C "$DOTFILES_DIR" describe --always --dirty --exclude '*' 2>/dev/null || :)
   fi
+  say "dotfiles ${commit:-unknown (not a git clone)}"
 }
 
 cmd_test() {
-  for t in init uninstall doctor sync-env install faults release; do
+  for t in init uninstall doctor sync-env install faults; do
     sh "$DOTFILES_DIR/test/$t.sh" || return 1
   done
   # Load this machine's profile in the matrix, so its host files are tested too.

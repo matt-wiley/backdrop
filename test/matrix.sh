@@ -37,7 +37,7 @@ run() {
 # layers: the layers the last run loaded, space-separated, in order.
 layers() {
   sed -n 's/^dotfiles: //p' "$scratch/stderr" |
-    sed -n -e 's|^sh/env\.sh$|env|p' -e 's|^sh/interactive\.sh$|interactive|p' \
+    sed -n -e 's|^sh/env\.sh$|env|p' \
            -e 's|^bash/rc\.bash$|bash|p' -e 's|^zsh/rc\.zsh$|zsh|p' |
     tr '\n' ' ' | sed 's/ $//'
 }
@@ -83,12 +83,12 @@ check sh   -c   ""
 check sh   -lc  "env"
 check bash -c   ""
 check bash -lc  "env"
-check bash -ic  "env interactive bash"
-check bash -lic "env env interactive bash"
+check bash -ic  "env bash"
+check bash -lic "env env bash"
 check zsh  -c   "env"
 check zsh  -lc  "env env"
-check zsh  -ic  "env interactive zsh"
-check zsh  -lic "env env interactive zsh"
+check zsh  -ic  "env zsh"
+check zsh  -lic "env env zsh"
 
 # TODO: PATH order and duplicates, missing-repo block, startup time (hyperfine),
 # --profile with zsh/zprof.
