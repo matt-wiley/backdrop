@@ -303,7 +303,7 @@ Every file in a profile is optional; delete the ones you don't need. Several mac
 
 ```toml
 [fd]
-bin = "fd fdfind"   # commands that count as installed; default: the table name
+bin = ["fd", "fdfind"]  # commands that count as installed; default: the table name
 brew = "fd"
 apt = "fd-find"
 ```

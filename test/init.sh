@@ -134,4 +134,50 @@ run_init --profile=nosuch
 check "warns on unknown profile" grep -q 'no directory hosts/nosuch' "$root/out"
 check "rejects profile with a slash" fails run_init --profile a/b
 
+# zsh reads .zprofile and .zshrc from $ZDOTDIR when ~/.zshenv sets it, so
+# init must put those blocks there, while the .zshenv block stays in $HOME.
+# doctor and uninstall must look in the same places. These cases need a real
+# zsh, because init asks zsh where it reads its files.
+if command -v zsh >/dev/null 2>&1; then
+  fresh
+  Z=$H/.config/zsh
+  printf 'export ZDOTDIR="$HOME/.config/zsh"\n' >"$H/.zshenv"
+  run_init --profile example
+  check "puts the zshrc block in ZDOTDIR" grep -q '^# >>> dotfiles ' "$Z/.zshrc"
+  check "puts the zprofile block in ZDOTDIR" grep -q '^# >>> dotfiles ' "$Z/.zprofile"
+  check "keeps the zshenv block in HOME" grep -q '^# >>> dotfiles ' "$H/.zshenv"
+  check "keeps ZDOTDIR below the zshenv block" grep -q '^export ZDOTDIR=' "$H/.zshenv"
+  check "creates no zshrc in HOME" test ! -e "$H/.zshrc"
+  check "doctor accepts the ZDOTDIR files" run_doctor
+  check "doctor reports no warnings with ZDOTDIR" out_has '^doctor: 0 errors, 0 warnings$'
+  check "doctor names the ZDOTDIR zshrc" out_has '^~/\.config/zsh/\.zshrc$'
+  run_uninstall
+  check "uninstall removes the ZDOTDIR zshrc" test ! -e "$Z/.zshrc"
+  check "uninstall keeps ZDOTDIR in zshenv" grep -qx 'export ZDOTDIR="$HOME/.config/zsh"' "$H/.zshenv"
+
+  # ZDOTDIR set after an earlier init leaves blocks in ~/.zshrc and
+  # ~/.zprofile that zsh no longer reads. init and doctor warn about them,
+  # and uninstall removes them along with the new ones.
+  fresh
+  run_init --profile example
+  printf 'export ZDOTDIR="$HOME/.config/zsh"\n' >>"$H/.zshenv"
+  run_init
+  check "warns about a zshrc block zsh no longer reads" out_has "$H/\.zshrc has a dotfiles block, but zsh reads"
+  run_doctor
+  check "doctor warns about the unread zshrc block" out_has 'warn   ~/\.zshrc has a dotfiles block'
+  run_uninstall
+  check "uninstall removes the unread zshrc block" test ! -e "$H/.zshrc"
+  check "uninstall removes the ZDOTDIR zshrc block too" test ! -e "$H/.config/zsh/.zshrc"
+
+  # A ZDOTDIR exported only in the shell that runs init, as editors' terminal
+  # integrations do, isn't where a new zsh looks. init ignores it and says so.
+  fresh
+  ZDOTDIR=$root/elsewhere
+  export ZDOTDIR
+  run_init
+  unset ZDOTDIR
+  check "ignores a ZDOTDIR set only in this shell" test -f "$H/.zshrc" -a ! -e "$root/elsewhere/.zshrc"
+  check "says it ignored that ZDOTDIR" out_has "ZDOTDIR is $root/elsewhere in this shell"
+fi
+
 finish

@@ -143,6 +143,7 @@ DOTFILES_DIR="$HOME/.dotfiles"   # repo path, written by init
 6. `uninstall` removes the text between and including the markers, plus the blank line `init` adds after the block, so `init` followed by `uninstall` restores a file byte for byte. A file left with nothing but the block is deleted, or restored from its `.dist` backup if one exists; an empty `~/.bash_profile` would otherwise hide `~/.profile` from bash login shells. If content was added below the block, the `.dist` backup is kept for a manual merge.
 7. Entry files that are symlinks are edited through the link; the link stays.
 8. `init` warns if `~/.bash_login` exists, since the `~/.bash_profile` it creates stops bash from reading it.
+9. zsh reads its files from `$ZDOTDIR` when it is set, usually by `~/.zshenv` itself, so the zsh entry files go where zsh reads them: `.zshenv` where `zsh -f` finds it, `.zprofile` and `.zshrc` where `zsh -c` does, after `.zshenv` has run. `init`, `doctor` and `uninstall` ask zsh with `ZDOTDIR` unset, because the value in the current shell may come from an editor's terminal integration rather than from startup. `init` creates the directory if needed and warns when the current shell's `ZDOTDIR` differs. A block left in `~/.zshrc` or `~/.zprofile` from before `ZDOTDIR` was set gets a warning from `init` and `doctor`, and `uninstall` removes it.
 
 ## Load-last handling
 
@@ -227,13 +228,15 @@ A single POSIX `sh` script, `bin/dotfiles`, with seven commands, each accepting 
 `dotfiles install` installs tools; it is the only command that touches package managers or uses `sudo`.
 
 - **Package list:** a declarative `packages.toml`, one table per logical tool, mapping each manager to its package name (for example `fd` is `fd-find` on apt, `fd` on brew and pacman). Optional keys:
-  - `bin`: the commands that count as installed, any one of them; defaults to the tool's name (for example `bin = "fd fdfind"`).
+  - `bin`: the commands that count as installed, any one of them; defaults to the tool's name unless `file` is set (for example `bin = ["fd", "fdfind"]`).
+  - `file`: files that count as installed, any one of them; for tools with no command, such as zsh plugins (for example `file = ["/opt/homebrew/share/x/x.zsh", "/usr/share/x/x.zsh"]`).
+  - Values are a quoted string, `true`/`false`, or an array of quoted strings, which may span lines.
   - `required = true`: `doctor` reports the tool when it is missing.
   - `mise = "SPEC"`: install with `mise use -g SPEC` instead of the package manager; for runtimes, such as `mise = "node@lts"`.
 - **Profiles:** a shared list plus `hosts/<profile>/packages.toml`. A table there adds a tool, or replaces the shared table of the same name.
 - **Managers:** Homebrew on macOS (if it is missing, `install` points to brew.sh); apt, dnf or pacman on Linux, then Homebrew. `--manager NAME` overrides detection. System managers run through `sudo` when not root; brew never does.
 - **Commands:** all missing packages go in one install command (apt runs `apt-get update` first), then `mise use -g` for each mise tool, after mise itself if it is being installed. Mise tools are skipped with a warning when mise is unavailable.
-- **Safety:** dry run by default, printing the plan and the exact commands; `--yes` applies. After applying, `install` warns when a tool's commands still aren't on `PATH`, and exits non-zero if a manager command fails.
+- **Safety:** dry run by default, printing the plan and the exact commands; `--yes` applies. After applying, `install` warns when none of a tool's commands is on `PATH` and none of its files exists, and exits non-zero if a manager command fails.
 - **First run:** `dotfiles init && dotfiles install --yes`.
 
 ### Doctor checks

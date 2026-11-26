@@ -68,7 +68,7 @@ You can skip the profile: run `init` without `--profile`, and the machine gets t
 `init` does the following:
 
 - Writes the profile name to `~/.config/dotfiles/host`. That file is per machine and isn't part of the repo.
-- Adds the block to the top of `~/.profile`, `~/.bash_profile`, `~/.bashrc`, `~/.zshenv`, `~/.zprofile` and `~/.zshrc`, creating any that don't exist. Your existing content moves below the block, unchanged.
+- Adds the block to the top of `~/.profile`, `~/.bash_profile`, `~/.bashrc`, `~/.zshenv`, `~/.zprofile` and `~/.zshrc`, creating any that don't exist. Your existing content moves below the block, unchanged. If your `~/.zshenv` sets `ZDOTDIR`, the `.zprofile` and `.zshrc` blocks go in that directory instead, because that's where zsh reads them.
 - On Linux, backs up any of those files that is still an untouched copy of the distro default (from `/etc/skel`) to `<file>.dist`, and replaces it with a bare block. The repo's config takes over what the default provided.
 - On Linux, writes `~/.config/environment.d/dotfiles.conf` so desktop apps get the same environment (see [Desktop apps on Linux](#desktop-apps-on-linux)).
 - Lists tools from `packages.toml` that aren't installed.
@@ -161,15 +161,23 @@ Add a table to `packages.toml`, or to `hosts/<profile>/packages.toml` for one pr
 
 ```toml
 [fd]
-bin = "fd fdfind"   # commands that count as installed; default: the table name
-required = true     # doctor reports it when missing
-brew = "fd"         # package name for each manager
+bin = ["fd", "fdfind"]  # commands that count as installed; default: the table name
+required = true         # doctor reports it when missing
+brew = "fd"             # package name for each manager
 apt = "fd-find"
 dnf = "fd-find"
 pacman = "fd"
 
 [node]
-mise = "node@lts"   # installed with `mise use -g`, not the package manager
+mise = "node@lts"       # installed with `mise use -g`, not the package manager
+
+[zsh-autosuggestions]
+file = [                # for tools with no command: files that count as installed
+  "/opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh",
+  "/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh",
+]
+brew = "zsh-autosuggestions"
+apt = "zsh-autosuggestions"
 ```
 
 Leave out a manager to skip the tool there. A table in a profile's `packages.toml` replaces the shared table of the same name.

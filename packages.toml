@@ -5,12 +5,22 @@
 # is often packaged under different names (fd is "fd-find" on apt).
 #
 #   [fd]
-#   bin = "fd fdfind"   # Commands that count as "installed"; any one is
-#                       # enough. Defaults to the table's name. Needed when the
-#                       # command isn't called the same as the tool.
-#   required = true     # `dotfiles doctor` reports the tool when it's missing.
-#   brew = "fd"         # The package name for each manager. Leave a manager
-#   apt = "fd-find"     # out and the tool is skipped on systems that use it.
+#   bin = ["fd", "fdfind"]  # Commands that count as "installed"; any one is
+#                           # enough. Defaults to the table's name. Needed
+#                           # when the command isn't called the same as the
+#                           # tool. A single command can be a plain string.
+#   required = true         # `dotfiles doctor` reports the tool when it's
+#                           # missing.
+#   brew = "fd"             # The package name for each manager. Leave a
+#   apt = "fd-find"         # manager out and the tool is skipped on systems
+#                           # that use it.
+#
+#   [zsh-autosuggestions]
+#   file = [                # Files that count as "installed"; any one is
+#     "/opt/homebrew/...",  # enough. For tools with no command, such as
+#     "/usr/share/...",     # shell plugins. List each place a manager might
+#   ]                       # put it. With `file` and no `bin`, the table's
+#                           # name isn't checked as a command.
 #
 #   [node]
 #   mise = "node@lts"   # Install with `mise use -g` instead of a package
@@ -21,27 +31,48 @@
 # A profile can add tools in hosts/<profile>/packages.toml. A table there with
 # the same name as one here replaces it on that profile's machines.
 
+# These paths match _df_load_last in zsh/rc.zsh, which sources the plugins.
+[zsh-autosuggestions]
+file = [
+  "/opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh",
+  "/usr/local/share/zsh-autosuggestions/zsh-autosuggestions.zsh",
+  "/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh",
+]
+required = true
+apt = "zsh-autosuggestions"
+brew = "zsh-autosuggestions"
+
+[zsh-syntax-highlighting]
+file = [
+  "/opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh",
+  "/usr/local/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh",
+  "/usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh",
+]
+required = true
+apt = "zsh-syntax-highlighting"
+brew = "zsh-syntax-highlighting"
+
 [ripgrep]
 bin = "rg"
 required = true
 brew = "ripgrep"
 apt = "ripgrep"
-dnf = "ripgrep"
-pacman = "ripgrep"
+# dnf = "ripgrep"
+# pacman = "ripgrep"
 
 [fd]
-bin = "fd fdfind"
+bin = ["fd", "fdfind"]
 required = true
 brew = "fd"
 apt = "fd-find"
-dnf = "fd-find"
-pacman = "fd"
+# dnf = "fd-find"
+# pacman = "fd"
 
 [fzf]
 brew = "fzf"
 apt = "fzf"
-dnf = "fzf"
-pacman = "fzf"
+# dnf = "fzf"
+# pacman = "fzf"
 
 [mise]
 brew = "mise"

@@ -24,6 +24,13 @@ set -u
 # and cache directories instead of the ones in the scratch home.
 unset XDG_CONFIG_HOME XDG_CACHE_HOME
 
+# zsh reads its startup files from $ZDOTDIR instead of $HOME when ZDOTDIR is
+# set. Editors' terminal integrations, such as VS Code's, export it pointing
+# at your real home, so the zsh shells the tests start, such as doctor's
+# alias and function check, would load your real ~/.zshrc instead of the
+# scratch home's.
+unset ZDOTDIR
+
 # This file is sourced, so $0 is the suite script in test/, and the repo is
 # the directory above it.
 repo=$(cd "$(dirname "$0")/.." && pwd -P)

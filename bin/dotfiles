@@ -63,6 +63,62 @@ SKEL_DIR=${DOTFILES_SKEL_DIR:-/etc/skel} # overridable for tests
 # ${pair#*:} (the part after it).
 ENTRY_FILES='profile:.profile bash_profile:.bash_profile bashrc:.bashrc zshenv:.zshenv zprofile:.zprofile zshrc:.zshrc'
 
+# zsh_dirs
+#
+# Sets ZSH_ENV_DIR, the directory zsh reads .zshenv from, and ZSH_RC_DIR, the
+# one it reads .zprofile and .zshrc from. zsh reads its startup files from
+# $ZDOTDIR when that's set, and from $HOME otherwise. ZDOTDIR is usually set
+# in ~/.zshenv itself, for example to ~/.config/zsh, and zsh then reads the
+# rest of its files from there, so the two directories can differ.
+#
+# Rather than parse anyone's startup files, this asks zsh. `zsh -f` reads only
+# /etc/zshenv, which can set ZDOTDIR too, so it shows where .zshenv is read.
+# Plain `zsh -c` also reads that .zshenv, so it shows where the other files
+# are read.
+#
+# ZDOTDIR is unset for both, because the value in this shell isn't
+# necessarily what a new terminal or login would get: editors' terminal
+# integrations, such as VS Code's, set it while they start the shell. The
+# probe prints its answer behind an @df@ prefix, as shadow_names does, so
+# anything the startup files print is ignored. Without zsh, both are $HOME.
+zsh_dirs() {
+  ZSH_ENV_DIR=$HOME ZSH_RC_DIR=$HOME
+  command -v zsh >/dev/null 2>&1 || return 0
+  zprobe='print -r -- "@df@ ${ZDOTDIR:-$HOME}"'
+  d=$( (unset ZDOTDIR; zsh -f -c "$zprobe") </dev/null 2>/dev/null | sed -n 's/^@df@ //p' | tail -n 1)
+  [ -z "$d" ] || ZSH_ENV_DIR=$d
+  d=$( (unset ZDOTDIR; zsh -c "$zprobe") </dev/null 2>/dev/null | sed -n 's/^@df@ //p' | tail -n 1)
+  [ -z "$d" ] || ZSH_RC_DIR=$d
+}
+
+# entry_path TEMPLATE:TARGET
+#
+# Prints the full path of one entry file from ENTRY_FILES. The zsh files are
+# in the directories zsh_dirs found, and the rest are in $HOME. zsh_dirs must
+# have run first.
+entry_path() {
+  case ${1#*:} in
+    .zshenv) printf '%s/.zshenv' "$ZSH_ENV_DIR" ;;
+    .zprofile | .zshrc) printf '%s/%s' "$ZSH_RC_DIR" "${1#*:}" ;;
+    *) printf '%s/%s' "$HOME" "${1#*:}" ;;
+  esac
+}
+
+# stale_zsh_blocks
+#
+# Prints each zsh entry file in $HOME that has a dotfiles block but isn't
+# read, because ZDOTDIR sends zsh elsewhere. That happens when ZDOTDIR is set
+# after init has already written ~/.zshrc. zsh_dirs must have run first.
+stale_zsh_blocks() {
+  for f in .zshenv .zprofile .zshrc; do
+    case $f in .zshenv) d=$ZSH_ENV_DIR ;; *) d=$ZSH_RC_DIR ;; esac
+    [ "$d" != "$HOME" ] || continue
+    if [ -f "$HOME/$f" ] && grep -q '^# >>> dotfiles ' "$HOME/$f"; then
+      printf '%s\n' "$HOME/$f"
+    fi
+  done
+}
+
 # Commands that need scratch files create a temporary directory in TMP, and
 # the EXIT trap removes it however the script ends. Some shells, such as dash,
 # don't run the EXIT trap when killed by a signal, so the second trap turns
@@ -283,24 +339,28 @@ read_profile() {
 #
 # Reads the packages.toml files and prints one tab-separated line per tool,
 # with these fields: the tool's name, 1 or 0 for whether it's required, the
-# commands that count as installed, its package name for MANAGER, and its
-# mise spec.
+# commands that count as installed, the files that count as installed, its
+# package name for MANAGER, and its mise spec.
 #
 # - A table in a later file replaces the table of the same name in an earlier
 #   one. That's how a profile's packages.toml overrides the shared list. The
 #   tool keeps its position from the first file.
-# - The commands come from the tool's `bin` key, and default to the tool's
+# - The commands come from the tool's `bin` key, and the files from its
+#   `file` key. When a tool has neither, its commands default to the tool's
 #   name.
+# - Commands are joined with spaces, because command names never contain
+#   them. Files are joined with ':', like PATH, so a path can contain spaces.
 # - An empty field is printed as "-". The callers read these lines with
 #   IFS set to a tab, and because a tab counts as whitespace to `read`, two
 #   tabs in a row would be treated as one and shift the remaining fields.
 #
 # This isn't a full TOML parser, since no TOML tool can be assumed on a fresh
 # machine. It understands what packages.toml uses: [name] table headers, and
-# key = value lines with a quoted string or true/false, optionally followed by
-# a # comment. In the header rule, the bracket expression [][[:space:]]
-# matches ], [ or whitespace (a ] placed first in the brackets is taken
-# literally), so gsub() strips "[ fd ]" down to "fd".
+# key = value lines whose value is a quoted string, true/false, or an array
+# of quoted strings, optionally followed by a # comment. An array can span
+# several lines, one item per line. In the header rule, the bracket
+# expression [][[:space:]] matches ], [ or whitespace (a ] placed first in
+# the brackets is taken literally), so gsub() strips "[ fd ]" down to "fd".
 #
 # The variable is named pm_ because POSIX sh has no local variables, and
 # cmd_install, which calls this through tools_for, already uses pm.
@@ -311,28 +371,62 @@ list_tools() {
     function flush() {
       if (name == "") return
       if (!(name in seen)) { order[++n] = name; seen[name] = 1 }
-      R[name] = req; B[name] = bins
+      if (bins == "" && files == "") bins = name
+      R[name] = req
+      B[name] = bins == "" ? "-" : bins; F[name] = files == "" ? "-" : files
       P[name] = pkg == "" ? "-" : pkg; M[name] = mise == "" ? "-" : mise
+    }
+    function set(k, v) {
+      if (k == "bin") bins = v
+      else if (k == "file") files = v
+      else if (k == "required") req = (v == "true")
+      else if (k == "mise") mise = v
+      else if (k == pm) pkg = v
+    }
+    # Adds each quoted string in s to val, separated by sep. It stops at a
+    # # outside quotes, which starts a comment, and sets closed when it
+    # reaches the ] that ends the array.
+    function take(s,    c, j) {
+      while (s != "") {
+        c = substr(s, 1, 1)
+        if (c == "#") return
+        if (c == "]") { closed = 1; return }
+        if (c == "\"") {
+          j = index(substr(s, 2), "\"")
+          if (j == 0) return
+          val = val (val == "" ? "" : sep) substr(s, 2, j - 1)
+          s = substr(s, j + 2)
+        } else s = substr(s, 2)
+      }
+    }
+    # The rest of an array that started on an earlier line.
+    inarr && !/^[[:space:]]*\[/ {
+      take($0)
+      if (closed) { set(key, val); inarr = 0 }
+      next
     }
     /^[[:space:]]*\[/ {
       flush()
       name = $0; gsub(/[][[:space:]]/, "", name)
-      bins = name; req = 0; pkg = ""; mise = ""; next
+      bins = ""; files = ""; req = 0; pkg = ""; mise = ""; inarr = 0; next
     }
     name != "" && /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=/ {
       k = $0; sub(/^[[:space:]]*/, "", k); sub(/[[:space:]]*=.*/, "", k)
-      v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]*#.*/, "", v)
-      gsub(/"/, "", v)
-      if (k == "bin") bins = v
-      else if (k == "required") req = (v == "true")
-      else if (k == "mise") mise = v
-      else if (k == pm) pkg = v
+      v = $0; sub(/^[^=]*=[[:space:]]*/, "", v)
+      if (substr(v, 1, 1) == "[") {
+        key = k; val = ""; closed = 0; sep = k == "file" ? ":" : " "
+        take(substr(v, 2))
+        if (closed) set(k, val); else inarr = 1
+        next
+      }
+      sub(/[[:space:]]*#.*/, "", v); gsub(/"/, "", v)
+      set(k, v)
     }
     END {
       flush()
       for (i = 1; i <= n; i++) {
         t = order[i]
-        printf "%s\t%d\t%s\t%s\t%s\n", t, R[t], B[t], P[t], M[t]
+        printf "%s\t%d\t%s\t%s\t%s\t%s\n", t, R[t], B[t], F[t], P[t], M[t]
       }
     }' "$@"
 }
@@ -353,14 +447,28 @@ tools_for() {
   list_tools "$tpm" "$@"
 }
 
-# has_any "COMMAND..."
+# has_any "COMMAND..." "FILE:FILE..."
 #
-# Succeeds if any of the space-separated commands can be run. A tool counts
-# as installed under any of its names, such as fd or fdfind. $1 is left
-# unquoted in the loop on purpose, so the shell splits it into words.
+# Succeeds if any of the space-separated commands can be run, or any of the
+# ':'-separated files exists. A tool counts as installed under any of its
+# names, such as fd or fdfind. Files are for tools that have no command,
+# such as zsh plugins, which are only files that the shell sources. Either
+# list can be "-", meaning none.
+#
+# $1 is left unquoted in the loop on purpose, so the shell splits it into
+# words. The files are split by hand instead, by cutting off one path at a
+# time, because splitting with IFS would also expand any * in a path.
 has_any() {
   for b in $1; do
+    [ "$b" != - ] || continue
     if command -v "$b" >/dev/null 2>&1; then return 0; fi
+  done
+  rest=${2:--}
+  [ "$rest" != - ] || return 1
+  while [ -n "$rest" ]; do
+    f=${rest%%:*}
+    case $rest in *:*) rest=${rest#*:} ;; *) rest= ;; esac
+    if [ -n "$f" ] && [ -e "$f" ]; then return 0; fi
   done
   return 1
 }
@@ -376,9 +484,9 @@ has_any() {
 # a variable. ${missing% } then drops the trailing space.
 missing_tools() {
   mode=$1
-  missing=$(tools_for - | while IFS='	' read -r tool req bins _pkg _mise; do
+  missing=$(tools_for - | while IFS='	' read -r tool req bins files _pkg _mise; do
     [ "$mode" = all ] || [ "$req" = 1 ] || continue
-    has_any "$bins" || printf '%s ' "$tool"
+    has_any "$bins" "$files" || printf '%s ' "$tool"
   done)
   printf '%s' "${missing% }"
 }
@@ -421,10 +529,23 @@ cmd_init() {
     say "profile  $(read_profile)"
   fi
 
+  # zsh may read its files from ZDOTDIR rather than $HOME (see zsh_dirs).
+  # If the ZDOTDIR in this shell points somewhere else again, say which one
+  # init used, because the files won't be where this shell looks.
+  zsh_dirs
+  if [ -n "${ZDOTDIR-}" ] && [ "$ZDOTDIR" != "$ZSH_ENV_DIR" ] && [ "$ZDOTDIR" != "$ZSH_RC_DIR" ]; then
+    warn "ZDOTDIR is $ZDOTDIR in this shell, but a new zsh reads its files from $ZSH_RC_DIR; using that"
+  fi
+
   failed=0
   for pair in $ENTRY_FILES; do
-    inject_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$HOME/${pair#*:}" "$dir" ||
+    target=$(entry_path "$pair")
+    [ -d "${target%/*}" ] || mkdir -p "${target%/*}"
+    inject_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$target" "$dir" ||
       failed=$((failed + 1))
+  done
+  for f in $(stale_zsh_blocks); do
+    warn "$f has a dotfiles block, but zsh reads ${f##*/} from $ZSH_RC_DIR; remove the block from $f by hand"
   done
   # A bash login shell reads only the first of ~/.bash_profile, ~/.bash_login
   # and ~/.profile that exists. Once init has created ~/.bash_profile, bash
@@ -717,9 +838,15 @@ cmd_uninstall() {
   esac
   TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
 
+  # Blocks are removed where zsh reads its files now, and also from the zsh
+  # files in $HOME that an earlier init wrote before ZDOTDIR was set.
+  zsh_dirs
   failed=0
   for pair in $ENTRY_FILES; do
-    uninstall_file "$HOME/${pair#*:}" || failed=$((failed + 1))
+    uninstall_file "$(entry_path "$pair")" || failed=$((failed + 1))
+  done
+  for f in $(stale_zsh_blocks); do
+    uninstall_file "$f" || failed=$((failed + 1))
   done
 
   envd=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/dotfiles.conf
@@ -956,6 +1083,8 @@ doctor_file() {
 #   aliases, and declare -F lists functions. In zsh, ${(k)builtins} is the
 #   list of keys of the builtins table, and /#/B adds "B " to the start of
 #   each one.
+# - ZDOTDIR is unset so zsh starts the way a new terminal would, for the
+#   reason given at zsh_dirs.
 # - stdin comes from /dev/null so the interactive shell can't wait for, or
 #   read, your keyboard input, and its stderr is discarded so startup noise
 #   doesn't end up in doctor's output.
@@ -970,7 +1099,7 @@ shadow_names() {
   # The probe's lines get an @df@ prefix and only lines with it are kept, so
   # anything else the rc files print, such as a greeting, can't be mistaken
   # for a name.
-  "$1" -ic "{ $probe; } | sed 's/^/@df@ /'" </dev/null 2>/dev/null |
+  (unset ZDOTDIR; "$1" -ic "{ $probe; } | sed 's/^/@df@ /'") </dev/null 2>/dev/null |
     sed -n 's/^@df@ //p' |
     awk -v common="$(printf '%s' "$COMMON_COMMANDS" | tr '\n' ' ')" '
       BEGIN { n = split(common, c, /[[:space:]]+/); for (i = 1; i <= n; i++) bad[c[i]] = 1 }
@@ -1031,6 +1160,10 @@ doctor_general() {
     done <"$TMP/shadow"
   done
 
+  for f in $(stale_zsh_blocks); do
+    report warn "$(show "$f") has a dotfiles block, but zsh reads ${f##*/} from $(show "$ZSH_RC_DIR"); remove the block by hand"
+  done
+
   for tool in $(missing_tools required); do
     report info "required tool '$tool' is not installed (\`dotfiles install\`)"
   done
@@ -1049,25 +1182,25 @@ doctor_local() {
   snapdir=$CACHE_DIR/doctor
   say "local content below each block"
   for pair in $ENTRY_FILES; do
-    name=${pair#*:}
+    name=${pair#*:} shown=$(show "$(entry_path "$pair")")
     cur=$TMP/local/$name
     [ -f "$cur" ] || continue
     old=$snapdir/$name
     if [ "$1" -eq 1 ] && [ -f "$old" ]; then
       if cmp -s "$old" "$cur"; then
-        say "  ~/$name: unchanged since last run"
+        say "  $shown: unchanged since last run"
       else
-        say "  ~/$name: changed since last run"
+        say "  $shown: changed since last run"
         # diff exits with status 1 whenever the files differ, which here is
         # expected. The pipeline's status is sed's, not diff's, but `|| :`
         # makes sure this line can never stop the script under set -e.
         diff -u -L "last run" -L "now" "$old" "$cur" | sed 's/^/    /' || :
       fi
     elif [ -s "$cur" ]; then
-      say "  ~/$name:"
+      say "  $shown:"
       sed 's/^/    | /' "$cur"
     else
-      say "  ~/$name: (empty)"
+      say "  $shown: (empty)"
     fi
   done
   # The saved files are all named after dotfiles, such as .zshrc, and * doesn't
@@ -1138,8 +1271,9 @@ cmd_doctor() {
   TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
   mkdir "$TMP/local"
 
+  zsh_dirs
   for pair in $ENTRY_FILES; do
-    doctor_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$HOME/${pair#*:}"
+    doctor_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$(entry_path "$pair")"
   done
   doctor_layers
   doctor_general
@@ -1233,24 +1367,25 @@ cmd_install() {
   # Sort each tool into one of three groups: already installed, installed
   # through mise (when it has a mise key, which takes priority), or installed
   # by the package manager. Tools to install are also written to
-  # $TMP/planned, so they can be checked again afterwards. mise_planned
+  # $TMP/planned, with their commands and files, so they can be checked
+  # again afterwards. mise_planned
   # records whether mise itself is among the packages; the spaces around
   # " $bins " make the case pattern match mise only as a whole word.
   TMP=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles.XXXXXX")
   tools_for "$pm" >"$TMP/tools"
   pkgs= specs= mise_planned=0
   : >"$TMP/planned"
-  while IFS='	' read -r tool _req bins pkg mise; do
-    if has_any "$bins"; then
+  while IFS='	' read -r tool _req bins files pkg mise; do
+    if has_any "$bins" "$files"; then
       say "ok       $tool"
     elif [ "$mise" != - ]; then
       say "install  $tool via mise ($mise)"
       specs="$specs $mise"
-      printf '%s\t%s\n' "$tool" "$bins" >>"$TMP/planned"
+      printf '%s\t%s\t%s\n' "$tool" "$bins" "$files" >>"$TMP/planned"
     elif [ "$pkg" != - ]; then
       say "install  $tool via $pm ($pkg)"
       pkgs="$pkgs $pkg"
-      printf '%s\t%s\n' "$tool" "$bins" >>"$TMP/planned"
+      printf '%s\t%s\t%s\n' "$tool" "$bins" "$files" >>"$TMP/planned"
       case " $bins " in *' mise '*) mise_planned=1 ;; esac
     else
       say "skip     $tool (no $pm package in packages.toml)"
@@ -1297,10 +1432,18 @@ cmd_install() {
   fi
 
   # Check that each installed tool can now be found. A package can succeed
-  # and still not provide the expected command, for example when it installs
-  # under a different name than packages.toml's `bin` key lists.
-  while IFS='	' read -r tool bins; do
-    has_any "$bins" || warn "install: $tool is still missing; none of '$bins' is on PATH (check its \`bin\` key)"
+  # and still not provide the expected command or file, for example when it
+  # installs under a different name or path than packages.toml's `bin` or
+  # `file` key lists.
+  while IFS='	' read -r tool bins files; do
+    has_any "$bins" "$files" && continue
+    if [ "$files" = - ]; then
+      warn "install: $tool is still missing; none of '$bins' is on PATH (check its \`bin\` key)"
+    elif [ "$bins" = - ]; then
+      warn "install: $tool is still missing; none of '$files' exists (check its \`file\` key)"
+    else
+      warn "install: $tool is still missing; none of '$bins' is on PATH and none of '$files' exists (check its \`bin\` and \`file\` keys)"
+    fi
   done <"$TMP/planned"
   [ "$failed" -eq 0 ]
 }
