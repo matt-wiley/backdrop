@@ -3,8 +3,8 @@
 #
 # The command-line tool for this repo. It injects a small block at the top of
 # each shell startup file (~/.profile, ~/.bashrc, ~/.zshrc and the rest), so
-# that every shell loads the repo's layers, and it can remove those blocks
-# again. It also checks the setup (doctor), installs the tools listed in
+# that every shell loads the repo's layers, and at the top of ~/.gitconfig, so
+# git loads the repo's git config. It can remove those blocks again. It also checks the setup (doctor), installs the tools listed in
 # packages.toml (install), writes the systemd login environment on Linux
 # (sync-env) and runs the test suites (test).
 #
@@ -56,12 +56,14 @@ CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles
 # directory. The tests point DOTFILES_SKEL_DIR at a directory of their own.
 SKEL_DIR=${DOTFILES_SKEL_DIR:-/etc/skel} # overridable for tests
 
-# The shell startup files the tool manages. Each entry is TEMPLATE:TARGET,
-# where TEMPLATE names blocks/TEMPLATE.sh and TARGET is the file in $HOME.
-# POSIX sh has no arrays, so this is a space-separated string. Code that loops
-# over it splits each pair with ${pair%%:*} (the part before the colon) and
-# ${pair#*:} (the part after it).
-ENTRY_FILES='profile:.profile bash_profile:.bash_profile bashrc:.bashrc zshenv:.zshenv zprofile:.zprofile zshrc:.zshrc'
+# The entry files the tool manages: the shell startup files, and ~/.gitconfig.
+# Each entry is TEMPLATE:TARGET, where TEMPLATE is a file in blocks/ and
+# TARGET is the file in $HOME. The template names keep their extension, so
+# the shell templates end in .sh and the git one, which isn't shell code,
+# doesn't. POSIX sh has no arrays, so this is a space-separated string. Code
+# that loops over it splits each pair with ${pair%%:*} (the part before the
+# colon) and ${pair#*:} (the part after it).
+ENTRY_FILES='profile.sh:.profile bash_profile.sh:.bash_profile bashrc.sh:.bashrc zshenv.sh:.zshenv zprofile.sh:.zprofile zshrc.sh:.zshrc gitconfig:.gitconfig'
 
 # zsh_dirs
 #
@@ -188,13 +190,24 @@ block_dir() {
 #
 # Prints the block template TEMPLATE with @DOTFILES_DIR@ replaced by DIR.
 #
+# git doesn't expand $HOME in its config files, but it does expand a leading
+# ~/ in paths. So for the git template, a DIR that starts with $HOME is
+# written with ~ instead. The block then still follows the home directory if
+# it's renamed or moved, as the shell blocks do.
+#
 # It splices the text together with index() and substr() rather than using
 # awk's sub(), because sub() gives & and \ in the replacement a special
 # meaning, which would corrupt a path containing them. 14 is the length of
 # "@DOTFILES_DIR@". Only the first placeholder on each line is replaced, which
-# is all the templates use.
+# is all the templates use. The variable is named rdir_ because POSIX sh has
+# no local variables, and doctor_file, which calls this, already uses rdir.
 render_block() {
-  awk -v dir="$2" '{
+  rdir_=$2
+  case ${1##*/}:$rdir_ in
+    gitconfig:'$HOME') rdir_='~' ;;
+    gitconfig:'$HOME'/*) rdir_="~/${rdir_#'$HOME/'}" ;;
+  esac
+  awk -v dir="$rdir_" '{
     i = index($0, "@DOTFILES_DIR@")
     if (i) $0 = substr($0, 1, i - 1) dir substr($0, i + 14)
     print
@@ -541,7 +554,7 @@ cmd_init() {
   for pair in $ENTRY_FILES; do
     target=$(entry_path "$pair")
     [ -d "${target%/*}" ] || mkdir -p "${target%/*}"
-    inject_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$target" "$dir" ||
+    inject_file "$DOTFILES_DIR/blocks/${pair%%:*}" "$target" "$dir" ||
       failed=$((failed + 1))
   done
   for f in $(stale_zsh_blocks); do
@@ -909,11 +922,16 @@ show() {
 #   broken   1 if a block is unterminated or nested
 #   first    1 if the first line that isn't blank or a shebang is a marker
 #   version  the version in the first block's opening marker, such as v2
-#   dir      the first block's DOTFILES_DIR value, as written
+#   dir      the repo path in the first block, as written
 #
 # In awk, a bare regular expression such as /^# >>> dotfiles / evaluates to
 # 1 or 0, so `first` records whether that first line was a marker. The
 # version is the fourth field of "# >>> dotfiles v2 >>> ...".
+#
+# A shell block holds the repo path in its DOTFILES_DIR="..." line. The git
+# block has no such line, because git has no variables, so its repo path is
+# read from the include line instead: the part of path = "..." before
+# /git/config.
 inspect() {
   awk '
     NR == 1 && /^#!/ { next }
@@ -928,6 +946,9 @@ inspect() {
     inblock && blocks == 1 && /^DOTFILES_DIR="/ {
       dir = $0; sub(/^DOTFILES_DIR="/, "", dir); sub(/".*/, "", dir)
     }
+    inblock && blocks == 1 && /^[[:space:]]*path = ".*\/git\/config"$/ {
+      dir = $0; sub(/^[[:space:]]*path = "/, "", dir); sub(/\/git\/config"$/, "", dir)
+    }
     END {
       if (inblock) broken = 1
       printf "blocks=%d\nbroken=%d\nfirst=%d\nversion=%s\ndir=%s\n",
@@ -940,15 +961,27 @@ first_block() {
   awk '/^# >>> dotfiles / { on = 1 } on { print } on && $0 == "# <<< dotfiles <<<" { exit }' "$1"
 }
 
-# sourced_files BLOCKFILE
+# sourced_files BLOCKFILE DIR
 #
-# Prints the repo-relative paths of the files a block always sources, such
-# as sh/env.sh, taken from each "$DOTFILES_DIR/..." string in it. Host files
-# are optional, so they shouldn't be reported as missing. Their paths contain
-# ${DOTFILES_PROFILE-}, and the sed pattern [^"$]* stops at a $, so they
-# don't match.
+# Prints the repo-relative paths of the files a block always loads, such as
+# sh/env.sh or git/config. A shell block names them as "$DOTFILES_DIR/...";
+# the git block names them with the repo path itself, "DIR/...", because git
+# has no variables. Host files are optional, so they shouldn't be reported as
+# missing. Their paths contain ${DOTFILES_PROFILE-}, so any path with a $ in
+# it is left out.
+#
+# take() looks for its prefix with index(), which matches plain text, because
+# DIR can contain characters such as . that a regular expression would treat
+# specially. It prints what follows the prefix, up to the closing quote.
 sourced_files() {
-  sed -n 's/.*"\$DOTFILES_DIR\/\([^"$]*\)".*/\1/p' "$1" | sort -u
+  awk -v dir="$2" '
+    function take(p,    i, s) {
+      i = index($0, p)
+      if (!i) return
+      s = substr($0, i + length(p)); s = substr(s, 1, index(s, "\"") - 1)
+      if (s != "" && s !~ /\$/) print s
+    }
+    { take("\"$DOTFILES_DIR/"); if (dir != "") take("\"" dir "/") }' "$1" | sort -u
 }
 
 # version_num vN
@@ -1008,18 +1041,20 @@ doctor_file() {
   [ "$blocks" -eq 1 ] || report error "$blocks blocks; \`dotfiles init\` merges them into one"
   [ "$first" -eq 1 ] || report error "block is not at the top; something was added above it (\`dotfiles init\` moves it back)"
 
-  # The block stores the path with a literal $HOME (see block_dir). Expand it
-  # here to get a real directory to check. The quotes in '$HOME' make the
-  # shell match those five characters, not the value of HOME.
+  # The shell blocks store the path with a literal $HOME (see block_dir), and
+  # the git block with ~ (see render_block). Expand either here to get a real
+  # directory to check. The quotes in '$HOME' and '~' make the shell match
+  # those characters, not the value of HOME.
   first_block "$target" >"$TMP/block"
   case $dir in
-    '$HOME') rdir=$HOME ;;
+    '$HOME' | '~') rdir=$HOME ;;
     '$HOME'/*) rdir=$HOME/${dir#'$HOME/'} ;;
+    '~'/*) rdir=$HOME/${dir#'~/'} ;;
     *) rdir=$dir ;;
   esac
   same_dir=0
   if [ -z "$dir" ]; then
-    report error "block has no DOTFILES_DIR line"
+    report error "block has no repo path (its DOTFILES_DIR line, or path = in the git block)"
   elif [ ! -d "$rdir" ]; then
     report error "DOTFILES_DIR does not exist: $dir"
   else
@@ -1032,7 +1067,7 @@ doctor_file() {
     fi
     # env.sh loads sh/lib.sh itself, so no block names lib.sh, but a missing
     # lib.sh breaks the block just the same.
-    for f in $(sourced_files "$TMP/block"); do
+    for f in $(sourced_files "$TMP/block" "$dir"); do
       [ -r "$rdir/$f" ] || report error "sourced file is missing: \$DOTFILES_DIR/$f"
       if [ "$f" = sh/env.sh ] && [ ! -r "$rdir/sh/lib.sh" ]; then
         report error "sourced file is missing: \$DOTFILES_DIR/sh/lib.sh"
@@ -1246,6 +1281,14 @@ parse_check() {
 # and zsh, so it must parse in all three; each rc file only needs to parse in
 # its own shell. With no profile selected, the host paths point at files that
 # don't exist, and parse_check skips them.
+#
+# git/config is checked by having git read it. git ignores an include whose
+# file is missing, but it stops with an error on one it can't parse, so a
+# mistake there would break every git command, not only the repo's settings.
+# --file reads only that file, so the machine's own config can't hide or cause
+# an error. `2>&1 >/dev/null` keeps git's error message and drops the list of
+# settings, in that order: stderr goes where stdout went, then stdout is
+# discarded.
 doctor_layers() {
   say "layers"
   before=$((ERRORS + WARNINGS))
@@ -1253,6 +1296,10 @@ doctor_layers() {
   parse_check "sh bash zsh" sh/lib.sh sh/env.sh "$host/env.sh"
   parse_check bash bash/rc.bash "$host/rc.bash"
   parse_check zsh zsh/rc.zsh "$host/rc.zsh"
+  if command -v git >/dev/null 2>&1 && [ -f "$DOTFILES_DIR/git/config" ] &&
+    ! msg=$(git config --file "$DOTFILES_DIR/git/config" --list 2>&1 >/dev/null); then
+    report error "git/config does not parse: $(printf '%s\n' "$msg" | head -n 1)"
+  fi
   [ $((ERRORS + WARNINGS)) -gt "$before" ] || report ok "every layer file parses"
 }
 
@@ -1273,7 +1320,7 @@ cmd_doctor() {
 
   zsh_dirs
   for pair in $ENTRY_FILES; do
-    doctor_file "$DOTFILES_DIR/blocks/${pair%%:*}.sh" "$(entry_path "$pair")"
+    doctor_file "$DOTFILES_DIR/blocks/${pair%%:*}" "$(entry_path "$pair")"
   done
   doctor_layers
   doctor_general

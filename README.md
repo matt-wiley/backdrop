@@ -23,6 +23,7 @@ Your edits are ordinary commits in the clone. To pick up changes from another ma
 | --- | --- | --- |
 | **Scripts need it** (`PATH`, exports) | `sh/env.sh` | `hosts/<profile>/env.sh` |
 | **Only you need it** (aliases, options, prompt, tools, plugins) | `zsh/rc.zsh` or `bash/rc.bash` | `hosts/<profile>/rc.zsh` or `rc.bash` |
+| **Git** (settings, aliases, global ignores) | `git/config`, `git/ignore` | None yet; one machine's settings go below the block in `~/.gitconfig` |
 
 ## Documentation
 

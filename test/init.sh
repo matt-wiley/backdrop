@@ -2,33 +2,70 @@
 # test/init.sh
 #
 # Checks `dotfiles init`, which writes the dotfiles block at the top of each
-# shell entry file: ~/.profile, ~/.bash_profile, ~/.bashrc, ~/.zshenv,
-# ~/.zprofile and ~/.zshrc. The checks follow the injection rules in the
+# entry file: ~/.profile, ~/.bash_profile, ~/.bashrc, ~/.zshenv, ~/.zprofile,
+# ~/.zshrc and ~/.gitconfig. The checks follow the injection rules in the
 # spec. They cover what init creates, what it must keep of a file's existing
 # content, and when it must refuse to change a file. Those files hold
-# people's own shell setup, so most of the checks are about leaving that
-# content alone.
+# people's own shell and git setup, so most of the checks are about leaving
+# that content alone.
 #
 # Each case runs init in a new scratch home directory with its own copy of
 # the repo (see test/lib.sh). Run it alone with `sh test/init.sh`.
 SUITE=init
 . "$(dirname "$0")/lib.sh"
 
-# On an empty home, init creates all six entry files and the cache
+# On an empty home, init creates all seven entry files and the cache
 # directory. The repo is in the default place, so the block refers to it as
 # $HOME/.dotfiles. Running init a second time must change nothing, so it is
 # always safe to run again, and it reports each unchanged file as ok.
 fresh
 check "succeeds on empty home" run_init
-check "creates all six entry files" test -f "$H/.profile" -a -f "$H/.bash_profile" \
-  -a -f "$H/.bashrc" -a -f "$H/.zshenv" -a -f "$H/.zprofile" -a -f "$H/.zshrc"
+check "creates all seven entry files" test -f "$H/.profile" -a -f "$H/.bash_profile" \
+  -a -f "$H/.bashrc" -a -f "$H/.zshenv" -a -f "$H/.zprofile" -a -f "$H/.zshrc" \
+  -a -f "$H/.gitconfig"
 check "writes repo path relative to HOME" grep -qx 'DOTFILES_DIR="$HOME/.dotfiles"   # repo path, written by init' "$H/.zshenv"
 check "creates cache dir" test -d "$H/.cache/dotfiles"
 snapshot >"$root/before"
 run_init
 snapshot >"$root/after"
 check "is idempotent" cmp -s "$root/before" "$root/after"
-check "reports unchanged files as ok" test "$(grep -cE '^ok +.*/\.(profile|bash_profile|bashrc|zshenv|zprofile|zshrc)$' "$root/out")" -eq 6
+check "reports unchanged files as ok" test "$(grep -cE '^ok +.*/\.(profile|bash_profile|bashrc|zshenv|zprofile|zshrc|gitconfig)$' "$root/out")" -eq 7
+
+# ~/.gitconfig gets a block too. It includes the repo's git/config and points
+# core.excludesFile at git/ignore. git doesn't expand $HOME, so the paths are
+# written with ~ instead. The machine's own settings, such as its [user]
+# section, stay below the block, and because git keeps the last value it
+# reads, they override the repo's. `git config --global` writes to
+# ~/.gitconfig, which is the machine's own file, so a name or email set that
+# way can't end up committed to the repo.
+fresh
+printf '[user]\n\tname = Machine\n' >"$H/.gitconfig"
+run_init
+check "writes the git include with ~" grep -qx '	path = "~/.dotfiles/git/config"' "$H/.gitconfig"
+check "keeps the machine's git settings" grep -qx '	name = Machine' "$H/.gitconfig"
+if command -v git >/dev/null 2>&1; then
+  check "git loads the repo's config" test "$(git_get init.defaultBranch)" = main
+  check "git keeps the machine's settings" test "$(git_get user.name)" = Machine
+  check "git uses the repo's ignore file" test "$(git_get --type=path core.excludesFile)" = "$H/.dotfiles/git/ignore"
+  printf '[init]\n\tdefaultBranch = trunk\n' >>"$H/.gitconfig"
+  check "machine settings override the repo's" test "$(git_get init.defaultBranch)" = trunk
+  cp "$H/.dotfiles/git/config" "$root/orig"
+  run_git config --global user.email me@example.com
+  check "git config --global writes to the machine's file" grep -q 'me@example.com' "$H/.gitconfig"
+  check "git config --global leaves the repo alone" cmp -s "$H/.dotfiles/git/config" "$root/orig"
+fi
+
+# A repo outside the home directory is written as an absolute path, in the
+# git block as in the shell blocks, and doctor accepts it. DOTFILES_DIR is a
+# physical path (see block_dir), so the expected path is resolved with
+# `pwd -P` too; on macOS the temporary directory is behind a symlink.
+fresh
+mv "$H/.dotfiles" "$root/outside$n"
+out_dir=$(cd "$root/outside$n" && pwd -P)
+HOME=$H DOTFILES_SKEL_DIR=$root/skel$n "$out_dir/bin/dotfiles" init >"$root/out" 2>&1
+check "writes an absolute git include outside HOME" grep -qx "	path = \"$out_dir/git/config\"" "$H/.gitconfig"
+HOME=$H DOTFILES_SKEL_DIR=$root/skel$n "$out_dir/bin/dotfiles" doctor >"$root/out" 2>&1
+check "doctor accepts the absolute git include" out_has '^doctor: 0 errors'
 
 # A file's existing content must survive. The block goes above it with one
 # blank line between them, and running init again must not add another blank

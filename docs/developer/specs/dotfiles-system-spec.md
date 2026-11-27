@@ -82,13 +82,16 @@ dotfiles/
     lib.sh                  # internal helpers: _df_path_prepend, _df_has, _df_trace
   bash/rc.bash              # interactive bash
   zsh/rc.zsh                # interactive zsh, including the load-last plugin list
+  git/
+    config                  # git settings and aliases, included by ~/.gitconfig
+    ignore                  # global ignore patterns (core.excludesFile)
   hosts/
     example/                # sample profile
     <profile>/env.sh        # versioned machine overrides, all optional
     <profile>/rc.bash
     <profile>/rc.zsh
     <profile>/packages.toml
-  blocks/                   # templates for the injected blocks, one per entry file
+  blocks/                   # templates for the injected blocks, one per entry file (gitconfig for ~/.gitconfig)
     README.md               # template-to-file map and versioning rule
   test/
     matrix.sh               # load matrix
@@ -108,7 +111,7 @@ All paths inside the repo are resolved from `DOTFILES_DIR`, which each injected 
 
 ## Injection blocks
 
-Each shell entry file gets one marked block at its very top; everything below the block belongs to the machine and is never read or edited by the tool, except as the rules below allow.
+Each entry file, the shell startup files and `~/.gitconfig`, gets one marked block at its very top; everything below the block belongs to the machine and is never read or edited by the tool, except as the rules below allow.
 
 | Entry file | Block sources, in order | Why |
 | --- | --- | --- |
@@ -118,8 +121,11 @@ Each shell entry file gets one marked block at its very top; everything below th
 | `~/.zshenv` | `env.sh`, host `env.sh` | Every zsh, including `zsh -c`, scripts and Claude Code |
 | `~/.zprofile` | `env.sh`, host `env.sh` (again) | Restores `PATH` order after macOS `path_helper` |
 | `~/.zshrc` | `rc.zsh`, host `rc.zsh` | Interactive zsh only; `rc.zsh` registers the load-last hook |
+| `~/.gitconfig` | `[include] path = git/config`, then `core.excludesFile = git/ignore` | Every git command, whatever shell or tool starts it |
 
 Each host file loads right after the shared file of the same layer, so it can override it.
+
+The git block works the same way as the shell blocks, using git's own `[include]`. git keeps the last value it reads for each setting, so the machine's settings below the block, such as its `[user]` identity, override the repo's. `git config --global` writes to `~/.gitconfig`, which stays the machine's own file, so nothing set that way reaches the repo. A symlinked `~/.gitconfig` would have sent those writes into the repo, which is why the repo's git config is included rather than linked. git doesn't expand `$HOME`, so a repo path inside the home directory is written as `~/...` in this block. The git block has no host layer yet: git can't read `DOTFILES_PROFILE`, so a profile's git file would have to be written into the block by `init`.
 
 ### Block format
 
@@ -242,8 +248,8 @@ A single POSIX `sh` script, `bin/dotfiles`, with seven commands, each accepting 
 ### Doctor checks
 
 - **Error:** entry file missing, block missing, block not first (the first line that is neither blank nor a shebang isn't the opening marker), more than one block, or an unterminated or nested block.
-- **Error:** `DOTFILES_DIR` does not exist, or a file the block always sources is missing, including `sh/lib.sh`, which `env.sh` needs.
-- **Error:** a layer file doesn't parse (`-n`) in a shell that loads it: the env layer files in `sh`, bash and zsh; each rc file in its own shell. The selected profile's files are checked too. Shells that aren't installed are skipped.
+- **Error:** `DOTFILES_DIR` does not exist, or a file the block always sources is missing, including `sh/lib.sh`, which `env.sh` needs. In the git block, the repo path is read from its include line, and the files are `git/config` and `git/ignore`; git skips a missing include without a word, so only `doctor` reports it.
+- **Error:** a layer file doesn't parse (`-n`) in a shell that loads it: the env layer files in `sh`, bash and zsh; each rc file in its own shell. The selected profile's files are checked too. Shells that aren't installed are skipped. `git/config` is checked with `git config --file`, when git is installed, because a config git can't parse breaks every git command.
 - **Warning:** block version older or newer than the repo's.
 - **Warning:** block edited inside the markers (it differs from what `init` would write), or `DOTFILES_DIR` points at a different copy of the repo.
 - **Warning:** selector missing, or it names a profile with no directory.
@@ -303,7 +309,7 @@ A trace mode plus a matrix script prove which files load in each shell, and CLI 
 
 ## Out of scope and decisions
 
-**Out of scope for v1:** Windows and WSL; shells beyond bash, zsh and POSIX `sh` (fish, nushell); non-shell config such as git, tmux and vim, which can reuse the same `init` later.
+**Out of scope for v1:** Windows and WSL; shells beyond bash, zsh and POSIX `sh` (fish, nushell); non-shell config other than git, such as tmux and vim, which can reuse the same `init` later as git does.
 
 **Decisions** (all former open questions are resolved)
 

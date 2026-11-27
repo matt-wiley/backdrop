@@ -23,7 +23,7 @@ run_init --profile example
 mkdir -p "$H/.config/environment.d"
 printf 'FOO=1\n' >"$H/.config/environment.d/dotfiles.conf"
 check "succeeds" run_uninstall
-check "deletes files that held only the block" sh -c '! ls -A "$1" | grep -qxE "\.(profile|bash_profile|bashrc|zshenv|zprofile|zshrc)"' _ "$H"
+check "deletes files that held only the block" sh -c '! ls -A "$1" | grep -qxE "\.(profile|bash_profile|bashrc|zshenv|zprofile|zshrc|gitconfig)"' _ "$H"
 check "deletes environment.d file" test ! -e "$H/.config/environment.d/dotfiles.conf"
 check "keeps selector" test -f "$H/.config/dotfiles/host"
 check "keeps cache dir" test -d "$H/.cache/dotfiles"
@@ -31,17 +31,19 @@ check "second run succeeds" run_uninstall
 
 # Files that had content before init get exactly that content back. The
 # files include a leading blank line and a shebang, because those sit right
-# where the block goes. init runs twice first, to show that a repeated init
-# leaves nothing extra behind for uninstall to miss.
+# where the block goes, and a ~/.gitconfig with the machine's own identity.
+# init runs twice first, to show that a repeated init leaves nothing extra
+# behind for uninstall to miss.
 fresh
 printf 'export FOO=1\nalias x=y\n' >"$H/.zshrc"
 printf '\n# leading blank line\n' >"$H/.zshenv"
 printf '#!/bin/bash\necho hi\n' >"$H/.bashrc"
-for f in .zshrc .zshenv .bashrc; do cp "$H/$f" "$root/orig$f"; done
+printf '[user]\n\tname = Machine\n' >"$H/.gitconfig"
+for f in .zshrc .zshenv .bashrc .gitconfig; do cp "$H/$f" "$root/orig$f"; done
 run_init
 run_init
 run_uninstall
-for f in .zshrc .zshenv .bashrc; do
+for f in .zshrc .zshenv .bashrc .gitconfig; do
   check "round-trips $f" cmp -s "$H/$f" "$root/orig$f"
 done
 
