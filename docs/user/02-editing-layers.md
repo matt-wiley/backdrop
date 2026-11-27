@@ -276,6 +276,18 @@ _df_load_last+=(/opt/work/share/work-plugin.zsh)
 
 `zsh -ic` never shows a prompt, so neither `dotfiles test` nor a quick `zsh -ic` loads these plugins. Open a new terminal to try them.
 
+## Git: `git/config` and `git/ignore`
+
+The block at the top of `~/.gitconfig` includes `git/config` and sets `core.excludesFile` to `git/ignore`, so both apply to every git command on the machine. Edit them like any git config or ignore file:
+
+```ini
+# git/config
+[alias]
+	st = status -s
+```
+
+Settings that belong to one machine, such as your `[user]` name and email, go below the block in `~/.gitconfig`; `git config --global` writes there too. git uses the last value it reads, so anything below the block overrides `git/config`. Check that git can still read the file with `dotfiles doctor`, which reports it if it doesn't parse.
+
 ## Machine-local settings
 
 Anything below the block in `~/.zshrc`, `~/.bashrc` or the other entry files stays on that machine and isn't versioned. It's the right place for one-off experiments, settings you don't want in the repo, and lines that installers add.

@@ -1,0 +1,6 @@
+# >>> dotfiles v2 >>> managed by `dotfiles init`; do not edit inside
+[include]
+	path = "@DOTFILES_DIR@/git/config"
+[core]
+	excludesFile = "@DOTFILES_DIR@/git/ignore"
+# <<< dotfiles <<<

@@ -22,12 +22,12 @@ SUITE=doctor
 # in which doctor should find nothing wrong.
 healthy() { fresh; run_init --profile example; }
 
-# A fresh init has nothing to report, and each of the six entry files gets
+# A fresh init has nothing to report, and each of the seven entry files gets
 # an ok line for its block. Every case below depends on this starting point.
 healthy
 check "passes on a fresh init" run_doctor
 check "reports no errors or warnings" out_has '^doctor: 0 errors, 0 warnings$'
-check "marks each file ok" test "$(grep -c '^  ok     block v2 at the top$' "$root/out")" -eq 6
+check "marks each file ok" test "$(grep -c '^  ok     block v2 at the top$' "$root/out")" -eq 7
 
 # Errors. Each of these means some shells won't load the dotfiles as they
 # should, so doctor must exit non-zero.
@@ -80,6 +80,30 @@ healthy
 rm "$H/.dotfiles/sh/lib.sh"
 check "fails when lib.sh is missing" fails run_doctor
 check "names lib.sh" out_has 'sourced file is missing: \$DOTFILES_DIR/sh/lib.sh'
+
+# The git block has no DOTFILES_DIR line, so doctor reads the repo path from
+# its include line instead, and checks the files that block names. git skips
+# an include whose file is missing without a word, which is why doctor has
+# to report it.
+healthy
+sed 's|^	path = .*|	path = "/nonexistent/git/config"|' "$H/.gitconfig" >"$root/tmp" && mv "$root/tmp" "$H/.gitconfig"
+check "fails when the git block's repo does not exist" fails run_doctor
+check "names the git block's bad repo path" out_has 'error  DOTFILES_DIR does not exist: /nonexistent'
+
+healthy
+rm "$H/.dotfiles/git/ignore"
+check "fails when a file the git block names is missing" fails run_doctor
+check "names the missing git file" out_has 'error  sourced file is missing: \$DOTFILES_DIR/git/ignore'
+
+# git stops every command with an error when an included file can't be
+# parsed, so a mistake in git/config is an error too. The unclosed [ makes
+# the file invalid.
+if command -v git >/dev/null 2>&1; then
+  healthy
+  printf '[broken\n' >>"$H/.dotfiles/git/config"
+  check "fails when git/config does not parse" fails run_doctor
+  check "says git/config does not parse" out_has 'error  git/config does not parse'
+fi
 
 # Warnings. These point at something worth fixing, but shells still load the
 # dotfiles, so the exit code stays zero.

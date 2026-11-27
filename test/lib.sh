@@ -134,10 +134,22 @@ count_blocks() { grep -c '^# >>> dotfiles ' "$1"; }
 
 # snapshot
 #
-# Prints all six entry files of the scratch home as one stream. A test saves
-# it before and after a command and compares the two, to show the command
-# changed nothing.
-snapshot() { cat "$H"/.profile "$H"/.bash_profile "$H"/.bashrc "$H"/.zshenv "$H"/.zprofile "$H"/.zshrc; }
+# Prints all seven entry files of the scratch home as one stream. A test
+# saves it before and after a command and compares the two, to show the
+# command changed nothing.
+snapshot() { cat "$H"/.profile "$H"/.bash_profile "$H"/.bashrc "$H"/.zshenv "$H"/.zprofile "$H"/.zshrc "$H"/.gitconfig; }
+
+# run_git ARGS...
+# git_get [OPTIONS] KEY
+#
+# run_git runs git as it would run in the scratch home: with HOME set to it,
+# and from inside it, so the repo the tests were started from can't add its
+# own .git/config. GIT_CONFIG_NOSYSTEM=1 skips the machine's /etc/gitconfig,
+# and GIT_CONFIG_GLOBAL is unset because it would replace ~/.gitconfig with
+# another file. git_get prints the value git ends up with for KEY, after
+# following includes.
+run_git() { (unset GIT_CONFIG_GLOBAL; cd "$H" && HOME=$H GIT_CONFIG_NOSYSTEM=1 git "$@"); }
+git_get() { run_git config --get "$@"; }
 
 # finish
 #

@@ -1,0 +1,32 @@
+[core]
+	excludesfile = ~/.gitignore_global
+[alias]
+	gcfg = config --global
+	ac = !git add . && git c
+	b = branch --format=\"%(refname:short)\"
+	ba = !git b --all
+	bc = !git b --show-current
+	bd = !git b -D
+	be = !git b | grep -E
+	bs = !git b | sort
+	bsn = "!function gx { l=($(git bs)); b=\"${l[$1]}\"; if [[ -n \"${b}\" ]]; then echo \"${b}\"; fi; unset gx; }; gx"
+	c = commit -m
+	co = checkout
+	con = "!function gx { git co $(git bsn $1); unset gx; }; gx"
+	f = fetch --all --prune
+	ffc = !git diff-tree --name-status -r
+	fp = !git fetch --all --prune && git pull
+	gcgl = config --global --list
+	hist = log --graph --abbrev-commit --decorate --format=format:'%C(bold blue)%h%C(reset) - %C(bold green)(%ar)%C(reset) %C(white)%s%C(reset) %C(dim white)- %an%C(reset)%C(bold yellow)%d%C(reset)' --all
+	ps = !git push --set-upstream origin $(git bc)
+	st = status -s
+	wc = whatchanged --since=\"1 day ago\" --oneline --no-merges
+	wt = worktree
+	repo = !git remote -v | grep -oE \"https[^ ]+\\.git\" | sed -E \"s/\\.git$//\" | head -n1
+	compare = "!function gx { echo \"$(git repo)/compare/${1:-main}...${2:-$(git branch --show-current)}\"; unset gx; }; gx"
+[http]
+	postBuffer = 150000000
+[init]
+	defaultBranch = main
+[push]
+	autoSetupRemote = true

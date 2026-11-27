@@ -69,6 +69,7 @@ You can skip the profile: run `init` without `--profile`, and the machine gets t
 
 - Writes the profile name to `~/.config/dotfiles/host`. That file is per machine and isn't part of the repo.
 - Adds the block to the top of `~/.profile`, `~/.bash_profile`, `~/.bashrc`, `~/.zshenv`, `~/.zprofile` and `~/.zshrc`, creating any that don't exist. Your existing content moves below the block, unchanged. If your `~/.zshenv` sets `ZDOTDIR`, the `.zprofile` and `.zshrc` blocks go in that directory instead, because that's where zsh reads them.
+- Adds a block to the top of `~/.gitconfig` as well, which loads the repo's `git/config` and `git/ignore`. Your own git settings, such as `[user]`, stay below it and take precedence.
 - On Linux, backs up any of those files that is still an untouched copy of the distro default (from `/etc/skel`) to `<file>.dist`, and replaces it with a bare block. The repo's config takes over what the default provided.
 - On Linux, writes `~/.config/environment.d/dotfiles.conf` so desktop apps get the same environment (see [Desktop apps on Linux](#desktop-apps-on-linux)).
 - Lists tools from `packages.toml` that aren't installed.
@@ -116,6 +117,7 @@ A few things sit outside that grid:
 | -------------------------------------------------- | --------------------------------------------------------- | ----------------------------------- |
 | A plugin that must load last (syntax highlighting) | `_df_load_last` in `zsh/rc.zsh` or the profile's `rc.zsh` | Sourced once, at the first prompt   |
 | A tool to install                                  | `packages.toml`                                           | See [Adding a tool](#adding-a-tool) |
+| A git setting, alias or global ignore              | `git/config` or `git/ignore`                              | Loaded by the `~/.gitconfig` block  |
 | Something for this machine only, not versioned     | Below the block in the entry file                         | `doctor` shows it                   |
 | A secret                                           | Below the block, or a gitignored file in your profile     | See [Secrets](#secrets)             |
 
