@@ -74,5 +74,10 @@ apt = "fzf"
 # dnf = "fzf"
 # pacman = "fzf"
 
+[git]
+apt = "git"
+brew = "git"
+
+
 [mise]
 brew = "mise"
