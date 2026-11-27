@@ -78,6 +78,5 @@ apt = "fzf"
 apt = "git"
 brew = "git"
 
-
 [mise]
 brew = "mise"
